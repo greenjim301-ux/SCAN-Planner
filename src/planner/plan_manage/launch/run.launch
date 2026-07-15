@@ -9,6 +9,10 @@
   <arg name="navi_mode" default="1"/>
   <arg name="sensor_type" default="lidar"/>
 
+  <!-- map source: set use_pcd_map=true to load pcd_map_file instead of the procedural mockamap -->
+  <arg name="use_pcd_map" default="false"/>
+  <arg name="pcd_map_file" default="$(find map_generator)/resource/building.pcd"/>
+
   <!-- body topic -->
   <arg name="body_pose_topic" value="$(eval '/LIO/odom_vehicle' if arg('is_real_world') else '/quad_0/body_pose')" />
   <param name="body_pose_topic" value="$(arg body_pose_topic)" type="str"/>
@@ -56,6 +60,8 @@
   <include file="$(find scan_planner)/launch/simulator.xml">
     <arg name="is_real_world" value="$(arg is_real_world)" />
     <arg name="sensor_type" value="$(arg sensor_type)" />
+    <arg name="use_pcd_map" value="$(arg use_pcd_map)" />
+    <arg name="pcd_map_file" value="$(arg pcd_map_file)" />
   </include>
 
 </launch>
