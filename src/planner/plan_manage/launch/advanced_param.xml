@@ -16,6 +16,7 @@
   <arg name="max_vel" default="0.75"/>
   <arg name="max_acc" default="0.5"/>
   <arg name="planning_horizon" default="7.5"/>
+  <arg name="body_height" default="0.5"/>
 
   <!-- main node -->
   <node pkg="scan_planner" name="scan_planner_node" type="scan_planner_node" output="screen" clear_params="true">
@@ -36,6 +37,7 @@
     <param name="fsm/fail_safe" value="true" type="bool"/> 
     <param name="fsm/max_replan_fail_count" value="1000" type="int"/>
     <param name="fsm/is_real_world" value="$(arg is_real_world)" type="bool"/>
+    <param name="grid_map/body_height" value="$(arg body_height)" type="double"/>
 
     <!-- sliding map -->
     <param name="grid_map/resolution" value="0.05" />

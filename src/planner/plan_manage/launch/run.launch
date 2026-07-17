@@ -13,6 +13,15 @@
   <arg name="use_pcd_map" default="false"/>
   <arg name="pcd_map_file" default="$(find map_generator)/resource/building.pcd"/>
 
+  <!-- simulated robot spawn pose -->
+  <arg name="init_x" default="-19.0"/>
+  <arg name="init_y" default="1.0"/>
+  <arg name="init_z" default="0.3"/>
+
+  <!-- robot body height above the ground/floor surface, used for self-inflation and
+       navi_mode=3's /initial_path z offset -->
+  <arg name="body_height" default="0.5"/>
+
   <!-- body topic -->
   <arg name="body_pose_topic" value="$(eval '/LIO/odom_vehicle' if arg('is_real_world') else '/quad_0/body_pose')" />
   <param name="body_pose_topic" value="$(arg body_pose_topic)" type="str"/>
@@ -38,6 +47,7 @@
 
     <arg name="is_real_world" value="$(arg is_real_world)"/>
     <arg name="navi_mode" value="$(arg navi_mode)" />
+    <arg name="body_height" value="$(arg body_height)" />
   </include>
 
   <!-- controller mode -->
@@ -62,6 +72,9 @@
     <arg name="sensor_type" value="$(arg sensor_type)" />
     <arg name="use_pcd_map" value="$(arg use_pcd_map)" />
     <arg name="pcd_map_file" value="$(arg pcd_map_file)" />
+    <arg name="init_x" value="$(arg init_x)" />
+    <arg name="init_y" value="$(arg init_y)" />
+    <arg name="init_z" value="$(arg init_z)" />
   </include>
 
 </launch>
