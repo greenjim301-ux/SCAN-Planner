@@ -36,7 +36,7 @@
     
     <!-- lidar topic -->
     <arg name="cloud_topic" value="$(eval '/LIO/clouds_lidar' if arg('is_real_world') else '/pcl_render_node/cloud')"/>
-    <arg name="cloud_is_world" value="$(eval 'false' if arg('is_real_world') else 'true')"/>
+    <arg name="cloud_is_world" value="true"/>
     
     <!-- depth topic -->
     <arg name="depth_topic" value="$(eval '/camera/aligned_depth_to_color/image_raw' if arg('is_real_world') else '/pcl_render_node/depth')"/>
