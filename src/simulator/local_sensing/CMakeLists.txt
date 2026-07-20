@@ -51,6 +51,8 @@ option(USE_GPU "Build GPU OpenGL renderer" OFF)
   find_package(catkin REQUIRED COMPONENTS
       roscpp roslib cmake_modules pcl_ros sensor_msgs geometry_msgs nav_msgs cv_bridge)
 
+      find_package(PCL REQUIRED)
+
       FIND_PACKAGE(Boost REQUIRED COMPONENTS filesystem iostreams program_options system serialization)
       if(Boost_FOUND)
         INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIRS})
@@ -77,7 +79,10 @@ option(USE_GPU "Build GPU OpenGL renderer" OFF)
     ${Eigen_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
     ${Pangolin_INCLUDE_DIRS}
+    ${PCL_INCLUDE_DIRS}
   )
+
+  link_directories(${PCL_LIBRARY_DIRS})
 
   
 

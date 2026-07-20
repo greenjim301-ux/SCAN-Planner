@@ -18,6 +18,8 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_conversions
 )
 
+find_package(PCL REQUIRED)
+
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
 
@@ -123,7 +125,10 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
 )
+
+link_directories(${PCL_LIBRARY_DIRS})
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}
@@ -156,6 +161,7 @@ add_executable(${PROJECT_NAME}_node
 ## Specify libraries to link a library or executable target against
  target_link_libraries(${PROJECT_NAME}_node
    ${catkin_LIBRARIES}
+   ${PCL_LIBRARIES}
  )
 
 #############

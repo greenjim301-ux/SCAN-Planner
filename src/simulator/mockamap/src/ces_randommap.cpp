@@ -27,6 +27,8 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include <deque>
+
 #include "visualization_msgs/Marker.h"
 #include "visualization_msgs/MarkerArray.h"
 
@@ -71,10 +73,10 @@ sensor_msgs::PointCloud2       localMap_pcd;
 pcl::PointCloud<pcl::PointXYZ> cloudMap;
 ros::Time                      begin_time = ros::TIME_MAX;
 
-typedef Eigen::Vector3d ObsPos;
-typedef Eigen::Vector3d ObsSize; // x, y, height --- z
+typedef Eigen::Vector3d      ObsPos;
+typedef Eigen::Vector3d      ObsSize; // x, y, height --- z
 typedef pair<ObsPos, ObsPos> Obstacle;
-std::vector<Obstacle> obstacle_list;
+std::vector<Obstacle>        obstacle_list;
 
 void
 fixedMapGenerate()
@@ -215,7 +217,8 @@ pubSensedPoints()
 
   pcl::PointXYZ ptInNoflation;
 
-  if (kdtreeLocalMap.radiusSearch(searchPoint, _sensing_range,
+  if (kdtreeLocalMap.radiusSearch(searchPoint,
+                                  _sensing_range,
                                   pointIdxRadiusSearch,
                                   pointRadiusSquaredDistance) > 0)
   {

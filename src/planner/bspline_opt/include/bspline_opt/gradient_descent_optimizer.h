@@ -1,6 +1,7 @@
 #ifndef _GRADIENT_DESCENT_OPT_H_
 #define _GRADIENT_DESCENT_OPT_H_
 
+#include <climits>
 #include <iostream>
 #include <vector>
 #include <Eigen/Eigen>
@@ -39,8 +40,8 @@ public:
 
 private:
   int variable_num_{0};
-  int iter_limit_{1e10};
-  int invoke_limit_{1e10};
+  int iter_limit_{INT_MAX};
+  int invoke_limit_{INT_MAX};
   double xtol_rel_;
   double xtol_abs_;
   double min_grad_;

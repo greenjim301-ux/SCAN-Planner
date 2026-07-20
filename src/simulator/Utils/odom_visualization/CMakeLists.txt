@@ -37,7 +37,7 @@ cmake_minimum_required(VERSION 2.8.3)
 project(odom_visualization)
 
 set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS "-O3 -Wall -g")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall -g")
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -142,8 +142,12 @@ include_directories(${ARMADILLO_INCLUDE_DIRS})
 ## Your package locations should be listed before other locations
 include_directories(include)
 include_directories(
-  ${catkin_INCLUDE_DIRS}
-)
+	${catkin_INCLUDE_DIRS} 
+	${roscpp_INCLUDE_DIRS} 
+	${tf_INCLUDE_DIRS} 
+	${sensor_msgs_INCLUDE_DIRS} 
+	${nav_msgs_INCLUDE_DIRS} 
+	${visualization_msgs_INCLUDE_DIRS})
 
 ## Declare a cpp library
 # add_library(irobot_msgs
