@@ -230,7 +230,7 @@ class KeypointRecorder:
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Record odometry positions to tools/keypoint.yaml.")
-    parser.add_argument("--odom", default="/LIO/odom_vehicle", help="nav_msgs/Odometry topic to record.")
+    parser.add_argument("--odom", default="/hand_lio/odom_vehicle", help="nav_msgs/Odometry topic to record.")
     return parser
 
 

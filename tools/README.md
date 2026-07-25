@@ -12,7 +12,7 @@ python3 tools/keypoint_recorder.py
 By default, the recorder subscribes to:
 
 ```bash
-/LIO/odom_vehicle
+/hand_lio/odom_vehicle
 ```
 
 To use another odometry topic:

@@ -23,7 +23,8 @@
   <arg name="body_height" default="0.5"/>
 
   <!-- body topic -->
-  <arg name="body_pose_topic" value="$(eval '/LIO/odom_vehicle' if arg('is_real_world') else '/quad_0/body_pose')" />
+  <!-- real world: hand_lio 桥接节点的产出（全局重定位 map 系），见 src/hand-lio -->
+  <arg name="body_pose_topic" value="$(eval '/hand_lio/odom_vehicle' if arg('is_real_world') else '/quad_0/body_pose')" />
   <param name="body_pose_topic" value="$(arg body_pose_topic)" type="str"/>
 
   <!-- main algorithm params -->
@@ -32,10 +33,10 @@
     <!-- sensor choose -->
     <arg name="sensor_type" value="$(arg sensor_type)"/>
     <arg name="body_pose_topic" value="$(arg body_pose_topic)" />
-    <arg name="sensor_pose_topic" value="$(eval '/LIO/odom_imu' if arg('is_real_world') else ('/quad_0/camera_pose' if arg('sensor_type') == 'depth' else '/quad_0/lidar_pose'))" />
+    <arg name="sensor_pose_topic" value="$(eval '/latest_imu_odom' if arg('is_real_world') else ('/quad_0/camera_pose' if arg('sensor_type') == 'depth' else '/quad_0/lidar_pose'))" />
     
     <!-- lidar topic -->
-    <arg name="cloud_topic" value="$(eval '/LIO/clouds_lidar' if arg('is_real_world') else '/pcl_render_node/cloud')"/>
+    <arg name="cloud_topic" value="$(eval '/hand_lio/clouds_lidar' if arg('is_real_world') else '/pcl_render_node/cloud')"/>
     <arg name="cloud_is_world" value="true"/>
     
     <!-- depth topic -->
