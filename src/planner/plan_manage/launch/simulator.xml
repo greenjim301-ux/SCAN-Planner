@@ -25,7 +25,9 @@
   <!-- local sensing -->
   <arg name="use_gpu" default="false"/>
 
-  <node if="$(eval (not arg('is_real_world')) and arg('use_pcd_map'))" pkg="map_generator" type="map_pub" name="map_pub" output="screen" args="$(arg pcd_map_file)">
+  <!-- 真机模式下也允许发布 PCD 地图：planner 不消费它，仅供 rviz 叠加显示先验地图做监控。
+       注意 PCD 必须和 /latest_imu_odom 在同一个全局 map 系（即手持设备重定位用的那张图），否则叠不准 -->
+  <node if="$(arg use_pcd_map)" pkg="map_generator" type="map_pub" name="map_pub" output="screen" args="$(arg pcd_map_file)">
       <param name="frame_id" value="$(arg pcd_frame_id)"/>
       <param name="publish_rate" value="$(arg pcd_publish_rate)"/>
       <param name="cloud_topic" value="/map_generator/global_cloud"/>
