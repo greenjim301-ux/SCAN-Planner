@@ -18,10 +18,6 @@
   <arg name="init_y" default="1.0"/>
   <arg name="init_z" default="0.3"/>
 
-  <!-- robot body height above the ground/floor surface, used for self-inflation and
-       navi_mode=3's /initial_path z offset -->
-  <arg name="body_height" default="0.5"/>
-
   <!-- body topic -->
   <!-- real world: hand_lio 桥接节点的产出（全局重定位 map 系），见 src/hand-lio -->
   <arg name="body_pose_topic" value="$(eval '/hand_lio/odom_vehicle' if arg('is_real_world') else '/quad_0/body_pose')" />
@@ -48,7 +44,6 @@
 
     <arg name="is_real_world" value="$(arg is_real_world)"/>
     <arg name="navi_mode" value="$(arg navi_mode)" />
-    <arg name="body_height" value="$(arg body_height)" />
   </include>
 
   <!-- controller mode -->
@@ -70,6 +65,7 @@
   <!-- use simulator -->
   <include file="$(find scan_planner)/launch/simulator.xml">
     <arg name="is_real_world" value="$(arg is_real_world)" />
+    <arg name="navi_mode" value="$(arg navi_mode)" />
     <arg name="sensor_type" value="$(arg sensor_type)" />
     <arg name="use_pcd_map" value="$(arg use_pcd_map)" />
     <arg name="pcd_map_file" value="$(arg pcd_map_file)" />

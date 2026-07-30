@@ -1,11 +1,12 @@
 <launch>
   <arg name="is_real_world"/>
+  <arg name="navi_mode"/>
   <arg name="sensor_type"/>
 
   <!-- initial state -->
-  <arg name="init_x" default="-19.0"/>
-  <arg name="init_y" default="1.0"/>
-  <arg name="init_z" default="0.3"/>
+  <arg name="init_x" default="$(eval -19.0 if arg('navi_mode') == 1 else -5.5)"/>
+  <arg name="init_y" default="$(eval 1.0 if arg('navi_mode') == 1 else 5.5)"/>
+  <arg name="init_z" default="$(eval 0.25 if arg('navi_mode') == 1 else 0.5)"/>
   <param unless="$(arg is_real_world)" name="init_x" value="$(arg init_x)" type="double"/>
   <param unless="$(arg is_real_world)" name="init_y" value="$(arg init_y)" type="double"/>
   <param unless="$(arg is_real_world)" name="init_z" value="$(arg init_z)" type="double"/>

@@ -5,3 +5,4 @@ build/
 devel/
 src/CMakeLists.txt
 src/simulator/map_generator/resource/
+tools/keypoint.yaml
