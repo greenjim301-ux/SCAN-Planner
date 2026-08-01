@@ -20,7 +20,7 @@
   <arg name="use_pcd_map" default="false"/>
   <arg name="pcd_map_file" default="$(find map_generator)/resource/building.pcd"/>
   <arg name="pcd_frame_id" default="world"/>
-  <arg name="pcd_publish_rate" default="0.2"/>
+  <arg name="pcd_publish_rate" default="0.1"/>
   <arg name="downsample_resolution" default="0.1"/>
 
   <!-- local sensing -->
