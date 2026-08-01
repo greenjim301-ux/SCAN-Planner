@@ -1,3 +1,27 @@
+# clicked_path_publisher.py
+
+`clicked_path_publisher.py` lets you draw a reference path in rviz and publish it
+as `nav_msgs/Path` on `/initial_path` for `navi_mode=3`.
+
+```bash
+source devel/setup.bash
+python3 tools/clicked_path_publisher.py
+```
+
+In rviz (Fixed Frame must be `world`):
+
+- `Publish Point`: add one waypoint per click (first point should be near the
+  robot's current position);
+- `2D Nav Goal`: add the final waypoint and publish the whole path, then the
+  buffer is cleared for the next path;
+- `2D Pose Estimate`: discard the current buffer and start over.
+
+Collected points are visualized on `/clicked_path_vis` (add a `Marker` display).
+Clicked z values are used as-is (the planner adds `body_height` itself); the
+final point inherits the z of the last clicked point since 2D Nav Goal always
+has z = 0. Use only with `navi_mode=3` — in `navi_mode=1` the planner consumes
+`/move_base_simple/goal` too.
+
 # keypoint_recorder.py
 
 `keypoint_recorder.py` records waypoint positions from a ROS odometry topic and writes them to `tools/keypoint.yaml`.
