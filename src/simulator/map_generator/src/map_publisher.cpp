@@ -1,4 +1,5 @@
 #include <pcl/filters/filter.h>
+#include <pcl/filters/passthrough.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -28,6 +29,8 @@ int main(int argc, char** argv) {
   double map_offset_x;
   double map_offset_y;
   double map_offset_z;
+  double z_min;
+  double z_max;
   private_node.param("frame_id", frame_id, std::string("world"));
   private_node.param("cloud_topic", cloud_topic, std::string("/map_generator/global_cloud"));
   private_node.param("publish_rate", publish_rate, 3.0);
@@ -35,6 +38,8 @@ int main(int argc, char** argv) {
   private_node.param("map_offset_x", map_offset_x, 0.0);
   private_node.param("map_offset_y", map_offset_y, 0.0);
   private_node.param("map_offset_z", map_offset_z, 0.0);
+  private_node.param("z_min", z_min, 0.0);
+  private_node.param("z_max", z_max, 0.0);
 
   if (file_name.empty()) {
     ROS_ERROR("[map_pub] No PCD file specified. Pass it as an arg or set ~file_name.");
@@ -63,6 +68,18 @@ int main(int argc, char** argv) {
       point.y += map_offset_y;
       point.z += map_offset_z;
     }
+  }
+
+  // z band-pass in the output frame (after offset); z_max <= z_min disables it.
+  // Meant to hide ceilings so rviz Publish Point clicks land on the floor.
+  if (z_max > z_min) {
+    pcl::PassThrough<pcl::PointXYZ> z_filter;
+    z_filter.setInputCloud(cloud.makeShared());
+    z_filter.setFilterFieldName("z");
+    z_filter.setFilterLimits(z_min, z_max);
+    z_filter.filter(cloud);
+    ROS_INFO("[map_pub] z band-pass [%.2f, %.2f] kept %zu points.", z_min, z_max,
+             cloud.points.size());
   }
 
   if (cloud.empty()) {

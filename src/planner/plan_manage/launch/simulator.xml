@@ -22,6 +22,10 @@
   <arg name="pcd_frame_id" default="world"/>
   <arg name="pcd_publish_rate" default="0.1"/>
   <arg name="downsample_resolution" default="0.1"/>
+  <!-- z band-pass for the published PCD map; pcd_z_max <= pcd_z_min disables it.
+       Cut the ceiling (e.g. pcd_z_min:=-0.5 pcd_z_max:=1.5) so rviz clicks land on the floor -->
+  <arg name="pcd_z_min" default="0.0"/>
+  <arg name="pcd_z_max" default="0.0"/>
 
   <!-- local sensing -->
   <arg name="use_gpu" default="false"/>
@@ -33,6 +37,8 @@
       <param name="publish_rate" value="$(arg pcd_publish_rate)"/>
       <param name="cloud_topic" value="/map_generator/global_cloud"/>
       <param name="downsample_res" value="$(arg downsample_resolution)"/>
+      <param name="z_min" value="$(arg pcd_z_min)"/>
+      <param name="z_max" value="$(arg pcd_z_max)"/>
   </node>
 
   <node if="$(eval (not arg('is_real_world')) and (not arg('use_pcd_map')))" pkg="mockamap" type="mockamap_node" name="mockamap_node" output="screen">  

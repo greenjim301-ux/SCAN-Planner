@@ -22,6 +22,15 @@ final point inherits the z of the last clicked point since 2D Nav Goal always
 has z = 0. Use only with `navi_mode=3` — in `navi_mode=1` the planner consumes
 `/move_base_simple/goal` too.
 
+Clicking on ceiling points is guarded twice:
+
+- clicks with z above `--max-z` (default 1.0 m) fall back to the previous
+  point's z (`--default-z`, default 0.5 m, for the first point);
+- the displayed PCD map can drop the ceiling entirely: pass
+  `pcd_z_min:=-0.5 pcd_z_max:=1.5` to `run.launch` and `map_pub` band-passes
+  the cloud in z before publishing, so clicks land on the floor
+  (`pcd_z_max <= pcd_z_min` disables the filter).
+
 # keypoint_recorder.py
 
 `keypoint_recorder.py` records waypoint positions from a ROS odometry topic and writes them to `tools/keypoint.yaml`.

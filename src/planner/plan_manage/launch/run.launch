@@ -12,6 +12,9 @@
   <!-- map source: set use_pcd_map=true to load pcd_map_file instead of the procedural mockamap -->
   <arg name="use_pcd_map" default="false"/>
   <arg name="pcd_map_file" default="$(find map_generator)/resource/building.pcd"/>
+  <!-- z band-pass for the displayed PCD map (cut the ceiling); pcd_z_max <= pcd_z_min disables it -->
+  <arg name="pcd_z_min" default="0.0"/>
+  <arg name="pcd_z_max" default="0.0"/>
 
   <!-- simulated robot spawn pose -->
   <arg name="init_x" default="0.0"/>
@@ -69,6 +72,8 @@
     <arg name="sensor_type" value="$(arg sensor_type)" />
     <arg name="use_pcd_map" value="$(arg use_pcd_map)" />
     <arg name="pcd_map_file" value="$(arg pcd_map_file)" />
+    <arg name="pcd_z_min" value="$(arg pcd_z_min)" />
+    <arg name="pcd_z_max" value="$(arg pcd_z_max)" />
     <arg name="init_x" value="$(arg init_x)" />
     <arg name="init_y" value="$(arg init_y)" />
     <arg name="init_z" value="$(arg init_z)" />

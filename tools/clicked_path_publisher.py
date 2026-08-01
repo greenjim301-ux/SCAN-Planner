@@ -17,6 +17,9 @@ rviz 里 Add -> Marker,话题选 /clicked_path_vis 即可实时查看。
 - z 直接取点击处的高度(rviz 里点在点云/地面上是多少就是多少),planner 的
   pathCallback 会自动加 body_height,这里不用考虑机体高度;2D Nav Goal 本身
   z 恒为 0,所以终点的 z 取最后一个 Publish Point 的 z。
+- 误点天花板保护:z 超过 --max-z(默认 1.0)的点击视为点到了高处,z 自动回退
+  为上一个点的 z(第一个点回退为 --default-z,默认 0.5)。配合 map_pub 的
+  pcd_z_min/pcd_z_max 把天花板从 rviz 显示里切掉效果更好。
 - planner 要求路径至少 2 个点,所以至少先 Publish Point 点 1 个,再用
   2D Nav Goal 收尾;第一个点建议放在机器狗当前位置附近(全局参考轨迹从
   路径第一个点起算)。
@@ -34,8 +37,10 @@ from visualization_msgs.msg import Marker
 
 
 class ClickedPathPublisher(object):
-    def __init__(self, path_topic, frame):
+    def __init__(self, path_topic, frame, max_z, default_z):
         self.frame = frame
+        self.max_z = max_z
+        self.default_z = default_z
         self.points = []  # [(x, y, z), ...]
         self.path_pub = rospy.Publisher(path_topic, Path, queue_size=1, latch=True)
         self.vis_pub = rospy.Publisher("/clicked_path_vis", Marker, queue_size=4, latch=True)
@@ -44,7 +49,14 @@ class ClickedPathPublisher(object):
         rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.reset_cb)
 
     def point_cb(self, msg):
-        p = (msg.point.x, msg.point.y, 0.50) # msg.point.z)
+        z = msg.point.z
+        if z > self.max_z:
+            # 点到了天花板/货架顶等高处,回退到上一个点的高度(没有就用 default_z)
+            z_fallback = self.points[-1][2] if self.points else self.default_z
+            rospy.logwarn("点击点 z=%.2f 超过 --max-z=%.2f,视为误点高处,z 回退为 %.2f",
+                          msg.point.z, self.max_z, z_fallback)
+            z = z_fallback
+        p = (msg.point.x, msg.point.y, z)
         self.points.append(p)
         rospy.loginfo("加入第 %d 个路径点 [%.2f, %.2f, %.2f]", len(self.points), p[0], p[1], p[2])
         self.publish_vis()
@@ -113,10 +125,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--path-topic", default="/initial_path", help="发布路径的话题")
     parser.add_argument("--frame", default="world", help="路径坐标系(应与 rviz Fixed Frame 一致)")
+    parser.add_argument("--max-z", type=float, default=1.0,
+                        help="点击点 z 超过该值视为误点天花板,回退到上一个点的 z(默认 1.0 m)")
+    parser.add_argument("--default-z", type=float, default=0.5,
+                        help="第一个点就误点高处时的回退 z(默认 0.5 m)")
     args = parser.parse_args(rospy.myargv()[1:])
 
     rospy.init_node("clicked_path_publisher")
-    ClickedPathPublisher(args.path_topic, args.frame)
+    ClickedPathPublisher(args.path_topic, args.frame, args.max_z, args.default_z)
     rospy.loginfo("clicked_path_publisher 就绪: Publish Point 加点 | 2D Nav Goal 收尾并发布到 %s | "
                   "2D Pose Estimate 清空重来 | 可视化: /clicked_path_vis", args.path_topic)
     rospy.spin()
