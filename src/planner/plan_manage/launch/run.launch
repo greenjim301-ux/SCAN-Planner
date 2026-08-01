@@ -14,8 +14,8 @@
   <arg name="pcd_map_file" default="$(find map_generator)/resource/building.pcd"/>
 
   <!-- simulated robot spawn pose -->
-  <arg name="init_x" default="-19.0"/>
-  <arg name="init_y" default="1.0"/>
+  <arg name="init_x" default="0.0"/>
+  <arg name="init_y" default="0.0"/>
   <arg name="init_z" default="0.3"/>
 
   <!-- body topic -->
