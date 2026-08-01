@@ -265,9 +265,19 @@ namespace scan_planner
 
   bool SCANReplanFSM::planNextWaypoint()
   {
+    // Skip waypoints already inside the 0.5 m arrival radius: reboundReplan
+    // rejects goals closer than 0.2 m, which would loop GEN_NEW_TRAJ forever.
+    while (current_wp_ >= 0 && current_wp_ < (int)active_waypoints_.size() &&
+           (active_waypoints_[current_wp_] - odom_pos_).norm() < 0.5)
+    {
+      ROS_INFO("[navi_mode=%d] Waypoint %d/%zu is within 0.5 m of current position, skip it.",
+               navi_mode_, current_wp_ + 1, active_waypoints_.size());
+      current_wp_++;
+    }
+
     if (current_wp_ < 0 || current_wp_ >= (int)active_waypoints_.size())
     {
-      ROS_WARN("[navi_mode=%d] No active waypoint to plan.", navi_mode_);
+      ROS_WARN("[navi_mode=%d] No active waypoint to plan (all remaining waypoints reached).", navi_mode_);
       return false;
     }
 
@@ -765,20 +775,19 @@ namespace scan_planner
 
     if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
     {
-      start_pt_ = info->position_traj_.evaluateDeBoorT(t_cur);
-      start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
-      start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
+      // Anchor the replan at the robot's actual pose instead of the virtual
+      // point on the current trajectory. Tracking lag between the two never
+      // gets corrected otherwise, so avoidance and collision checking would
+      // act on a position the robot is not at. The global reference is still
+      // kept untouched; getLocalTarget() re-projects odom onto it.
+      setStartStateFromOdomOrCurrentTraj();
 
-      bool success = callReboundReplan(false, false);
+      bool success = callReboundReplan(true, false);
       if (!success)
       {
-        success = callReboundReplan(true, false);
+        success = callReboundReplan(true, true);
         if (!success)
-        {
-          success = callReboundReplan(true, true);
-          if (!success)
-            return false;
-        }
+          return false;
       }
 
       return true;
