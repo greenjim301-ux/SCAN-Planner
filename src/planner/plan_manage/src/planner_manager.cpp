@@ -1,5 +1,7 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
+#include <algorithm>
+#include <cmath>
 #include <thread>
 
 namespace scan_planner
@@ -289,12 +291,46 @@ namespace scan_planner
         pos = UniformBspline(optimal_control_points, 3, ts);
     }
 
-    if (!flag_step_2_success || !checkDynamicFeasibility(pos))
+    if (!flag_step_2_success)
     {
-      printf("\033[34mThis refined trajectory is unsafe or dynamically infeasible. Skip publishing it.\n\033[0m");
+      printf("\033[34mTrajectory refinement failed. Skip publishing it.\n\033[0m");
       continuous_failures_count_++;
       return false;
     }
+
+    /*** STEP 4: SLOW THE TRAJECTORY DOWN UNTIL IT IS DYNAMICALLY FEASIBLE ***/
+    // The refine step limits the control-point derivatives per axis, while the
+    // gate below samples the actual curve and checks the 3D norm, so a
+    // trajectory can pass refinement and still exceed the limits by a few
+    // percent. Rejecting it outright used to spin GEN_NEW_TRAJ at 100 Hz on an
+    // unchanged start/goal pair until max_replan_fail_count forced an emergency
+    // stop. Scaling time keeps the geometry (and the collision-free property)
+    // and only makes the robot move slower.
+    constexpr int max_stretch_iter = 3;
+    constexpr double max_total_stretch = 3.0;
+    double required_stretch = 1.0;
+    double total_stretch = 1.0;
+    bool feasible = checkDynamicFeasibility(pos, &required_stretch);
+    for (int i = 0; !feasible && i < max_stretch_iter; ++i)
+    {
+      const double step = std::max(1.01, required_stretch * 1.02); // 2% margin
+      if (total_stretch * step > max_total_stretch)
+        break;
+
+      pos.scaleTime(step);
+      total_stretch *= step;
+      feasible = checkDynamicFeasibility(pos, &required_stretch);
+    }
+
+    if (!feasible)
+    {
+      printf("\033[34mThis refined trajectory is dynamically infeasible even after slowing it down. Skip publishing it.\n\033[0m");
+      continuous_failures_count_++;
+      return false;
+    }
+
+    if (total_stretch > 1.0)
+      ROS_WARN_THROTTLE(1.0, "Trajectory slowed down %.2fx to satisfy the dynamic limits.", total_stretch);
 
     t_refine = ros::Time::now() - t_start;
 
@@ -499,7 +535,7 @@ namespace scan_planner
     local_data_.traj_id_ += 1;
   }
 
-  bool SCANPlannerManager::checkDynamicFeasibility(UniformBspline position_traj)
+  bool SCANPlannerManager::checkDynamicFeasibility(UniformBspline position_traj, double *required_stretch)
   {
     UniformBspline vel_traj = position_traj.getDerivative();
     UniformBspline acc_traj = vel_traj.getDerivative();
@@ -508,24 +544,30 @@ namespace scan_planner
     const double vel_limit = pp_.max_vel_ + pp_.vel_tolerance_;
     const double acc_limit = pp_.max_acc_ + pp_.acc_tolerance_;
 
+    // Scan the whole trajectory instead of returning at the first violation, so
+    // the caller can derive one time-stretch factor that fixes all of them.
+    double max_vel = 0.0;
+    double max_acc = 0.0;
     for (double t = 0.0; t < duration + 1e-6; t += sample_dt)
     {
       const double tc = std::min(t, duration);
-      Eigen::Vector3d vel = vel_traj.evaluateDeBoorT(tc);
-      if (vel.norm() > vel_limit)
-      {
-        ROS_WARN_STREAM("Dynamic feasibility check failed: velocity limit exceeded at t="
-                        << tc << ", |v|=" << vel.norm() << " > " << vel_limit);
-        return false;
-      }
+      max_vel = std::max(max_vel, vel_traj.evaluateDeBoorT(tc).norm());
+      max_acc = std::max(max_acc, acc_traj.evaluateDeBoorT(tc).norm());
+    }
 
-      Eigen::Vector3d acc = acc_traj.evaluateDeBoorT(tc);
-      if (acc.norm() > acc_limit)
-      {
-        ROS_WARN_STREAM("Dynamic feasibility check failed: acceleration limit exceeded at t="
-                        << tc << ", |a|=" << acc.norm() << " > " << acc_limit);
-        return false;
-      }
+    if (required_stretch != nullptr)
+    {
+      // Time scaled by k divides velocity by k and acceleration by k^2.
+      *required_stretch = std::max({1.0,
+                                    vel_limit > 1e-6 ? max_vel / vel_limit : 1.0,
+                                    acc_limit > 1e-6 ? std::sqrt(max_acc / acc_limit) : 1.0});
+    }
+
+    if (max_vel > vel_limit || max_acc > acc_limit)
+    {
+      ROS_WARN_STREAM_THROTTLE(1.0, "Dynamic limits exceeded: |v|max=" << max_vel << "/" << vel_limit
+                                                                      << ", |a|max=" << max_acc << "/" << acc_limit);
+      return false;
     }
 
     return true;

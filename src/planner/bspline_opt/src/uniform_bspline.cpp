@@ -205,6 +205,21 @@ namespace scan_planner
       u_(i) += delta_t;
   }
 
+  void UniformBspline::scaleTime(const double &ratio)
+  {
+    // Uniform time reparameterization. Unlike lengthenTime(), which stretches
+    // only the interior knots to preserve the boundary derivatives, this scales
+    // the whole knot vector: the geometry of the curve is untouched (control
+    // points do not move, so a collision-free path stays collision-free) while
+    // velocity scales by 1/ratio and acceleration by 1/ratio^2 everywhere,
+    // including the boundary segments.
+    if (ratio <= 0.0)
+      return;
+
+    u_ *= ratio;
+    interval_ *= ratio;
+  }
+
   // void UniformBspline::recomputeInit() {}
 
   void UniformBspline::parameterizeToBspline(const double &ts, const vector<Eigen::Vector3d> &point_set,
