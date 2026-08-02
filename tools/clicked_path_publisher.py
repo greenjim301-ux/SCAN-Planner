@@ -7,9 +7,10 @@
     python3 tools/clicked_path_publisher.py --path-topic /initial_path --frame world
 
 rviz 操作(Fixed Frame 需为 world):
-    Publish Point     逐个点出路径点,每点一次加一个;
-    2D Nav Goal       作为最后一个路径点,并触发发布/写盘;完成后清空,可画下一条;
-    2D Pose Estimate  放弃当前已点的点,清空重来。
+    2D Nav Goal       逐个点出路径点,每点一次加一个(在地面上任意位置点即可,
+                      不需要点中点云上的点,朝向随意);
+    2D Pose Estimate  收尾:把已点的点整体发布/写盘,然后清空,可画下一条;
+    Publish Point     放弃当前已点的点,清空重来。
 
 已点的点在 /clicked_path_vis 上有 Marker 可视化(橙球 + 绿线),
 rviz 里 Add -> Marker,话题选 /clicked_path_vis 即可实时查看。
@@ -27,12 +28,12 @@ rviz 里 Add -> Marker,话题选 /clicked_path_vis 即可实时查看。
       planner 收到即开始新一轮(到达终点后回到 WAIT_TARGET,可反复发);
   (b) 写 keypoint.yaml 留档(planner 目前启动时不加载它,仅作记录)。
 - 本脚本只适用于单层平面场景,多层楼请用 keypoint_recorder 遛狗录点。
-- mode=path 时 planner 要求路径至少 2 个点,所以至少先 Publish Point 点 1 个,
-  再用 2D Nav Goal 收尾;第一个点建议放在机器狗当前位置附近(全局参考轨迹从
-  路径第一个点起算)。mode=keypoint 允许只用 2D Nav Goal 点 1 个 waypoint。
-- navi_mode=1 也订阅 /move_base_simple/goal,本脚本不要和 navi_mode=1/3 的
-  planner 同时跑;navi_mode=2 的 planner 只订阅 /preset_waypoints,和
-  mode=keypoint 配套同时跑正是预期用法。
+- mode=path 至少要 2 个点,mode=keypoint 至少 1 个,不够时 2D Pose Estimate
+  收尾会被拒绝并提示。mode=path 的第一个点建议放在机器狗当前位置附近
+  (全局参考轨迹从路径第一个点起算)。
+- navi_mode=1 的 planner 也订阅 /move_base_simple/goal(2D Nav Goal),
+  本脚本不要和 navi_mode=1 的 planner 同时跑;navi_mode=2/3 的 planner
+  分别只订阅 /preset_waypoints 和 /initial_path,同时跑没有冲突。
 - mode=path 发布前确认 planner 已收到里程计,否则它会打 "No odometry yet"
   并丢弃路径。
 """
@@ -81,23 +82,24 @@ class ClickedPathPublisher(object):
         else:
             self.wp_pub = rospy.Publisher(args.waypoints_topic, Path, queue_size=1)
         self.vis_pub = rospy.Publisher("/clicked_path_vis", Marker, queue_size=4)
-        rospy.Subscriber("/clicked_point", PointStamped, self.point_cb)
-        rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_cb)
-        rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.reset_cb)
+        rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_cb)      # 2D Nav Goal: 加点
+        rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.finish_cb)  # 2D Pose Estimate: 收尾发布
+        rospy.Subscriber("/clicked_point", PointStamped, self.point_cb)              # Publish Point: 清空重来
 
-    def point_cb(self, msg):
-        p = (msg.point.x, msg.point.y, self.fixed_z)
+    def goal_cb(self, msg):
+        p = (msg.pose.position.x, msg.pose.position.y, self.fixed_z)
         self.points.append(p)
         rospy.loginfo("加入第 %d 个路径点 [%.2f, %.2f, %.2f]", len(self.points), p[0], p[1], p[2])
         self.publish_vis()
 
-    def goal_cb(self, msg):
-        if not self.points and self.mode == "path":
-            rospy.logwarn("还没有 Publish Point 点出的路径点,至少先点 1 个再用 2D Nav Goal 收尾")
+    def finish_cb(self, _msg):
+        min_pts = 2 if self.mode == "path" else 1
+        if len(self.points) < min_pts:
+            rospy.logwarn("当前只有 %d 个点,mode=%s 至少需要 %d 个,先用 2D Nav Goal 加点",
+                          len(self.points), self.mode, min_pts)
             return
-        end = (msg.pose.position.x, msg.pose.position.y, self.fixed_z)
-        pts = self.points + [end]
 
+        pts = list(self.points)
         if self.mode == "path":
             self.publish_path(pts)
         else:
@@ -141,6 +143,9 @@ class ClickedPathPublisher(object):
         self.points = []
         rospy.loginfo("已清空当前待选路径点")
         self.publish_vis()
+
+    def point_cb(self, _msg):
+        self.reset_cb(_msg)
 
     def publish_vis(self):
         stamp = rospy.Time.now()
@@ -193,12 +198,10 @@ def main():
 
     rospy.init_node("clicked_path_publisher")
     ClickedPathPublisher(args)
-    if args.mode == "path":
-        rospy.loginfo("clicked_path_publisher 就绪(mode=path): Publish Point 加点 | 2D Nav Goal 收尾并发布到 %s | "
-                      "2D Pose Estimate 清空重来 | 可视化: /clicked_path_vis", args.path_topic)
-    else:
-        rospy.loginfo("clicked_path_publisher 就绪(mode=keypoint): Publish Point 加点 | 2D Nav Goal 收尾并写 %s | "
-                      "2D Pose Estimate 清空重来 | 可视化: /clicked_path_vis", args.output)
+    target = args.path_topic if args.mode == "path" else args.waypoints_topic
+    rospy.loginfo("clicked_path_publisher 就绪(mode=%s): 2D Nav Goal 加点 | "
+                  "2D Pose Estimate 收尾并发布到 %s | Publish Point 清空重来 | "
+                  "可视化: /clicked_path_vis", args.mode, target)
     rospy.spin()
 
 
