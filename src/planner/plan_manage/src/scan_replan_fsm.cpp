@@ -1,24 +1,6 @@
 
 #include <plan_manage/scan_replan_fsm.h>
 #include <cmath>
-#include <cstdlib>
-
-namespace
-{
-  std::string shellQuote(const std::string &value)
-  {
-    std::string quoted = "'";
-    for (const char c : value)
-    {
-      if (c == '\'')
-        quoted += "'\\''";
-      else
-        quoted += c;
-    }
-    quoted += "'";
-    return quoted;
-  }
-} // namespace
 
 namespace scan_planner
 {
@@ -53,35 +35,6 @@ namespace scan_planner
     nh.param("grid_map/body_height", body_height_, 0.0);
     nh.param("grid_map/frame_id", self_inflation_frame_id_, std::string("world"));
 
-    if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
-    {
-      const std::string keypoints_yaml = "\"$(rospack find scan_planner)/../../../tools/keypoint.yaml\"";
-      const std::string load_keypoints_cmd =
-          "rosparam load " + keypoints_yaml + " " + shellQuote(nh.getNamespace());
-      if (std::system(load_keypoints_cmd.c_str()) != 0)
-      {
-        ROS_ERROR("[SCANReplanFSM] Failed to load keypoints_yaml: tools/keypoint.yaml");
-        ros::shutdown();
-        return;
-      }
-
-      nh.param("fsm/waypoint_num", waypoint_num_, -1);
-
-      if (waypoint_num_ <= 0)
-      {
-        ROS_ERROR("[SCANReplanFSM] navi_mode=2 requires keypoints_yaml with fsm/waypoint_num and fsm/waypoint{i}_{x,y,z}.");
-        ros::shutdown();
-        return;
-      }
-      preset_waypoints_.resize(waypoint_num_);
-      for (int i = 0; i < waypoint_num_; i++)
-      {
-        nh.param("fsm/waypoint" + to_string(i) + "_x", preset_waypoints_[i](0), -1.0);
-        nh.param("fsm/waypoint" + to_string(i) + "_y", preset_waypoints_[i](1), -1.0);
-        nh.param("fsm/waypoint" + to_string(i) + "_z", preset_waypoints_[i](2), -1.0);
-      }
-    }
-
     /* initialize main modules */
     visualization_.reset(new PlanningVisualization(nh));
     planner_manager_.reset(new SCANPlannerManager);
@@ -103,12 +56,7 @@ namespace scan_planner
     if (navi_mode_ == NAVI_MODE::MANUAL_TARGET)
       goal_sub_ = nh.subscribe("/move_base_simple/goal", 1, &SCANReplanFSM::rvizGoalCallback, this);
     else if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
-    {
-      ros::Duration(1.0).sleep();
-      while (ros::ok() && !have_odom_)
-        ros::spinOnce();
-      planGlobalTrajbyGivenWps();
-    }
+      waypoints_sub_ = nh.subscribe("/preset_waypoints", 1, &SCANReplanFSM::presetWaypointsCallback, this);
     else if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
       path_sub_ = nh.subscribe("/initial_path", 1, &SCANReplanFSM::pathCallback, this);
     else
@@ -138,6 +86,39 @@ namespace scan_planner
     {
       ROS_ERROR("Unable to generate global trajectory to first preset waypoint!");
     }
+  }
+
+  void SCANReplanFSM::presetWaypointsCallback(const nav_msgs::PathConstPtr &msg)
+  {
+    if (!msg || msg->poses.empty())
+    {
+      ROS_WARN_THROTTLE(1.0, "[presetWaypointsCallback] Empty waypoint message, ignore.");
+      return;
+    }
+    if (!have_odom_)
+    {
+      ROS_WARN("[presetWaypointsCallback] No odometry yet, ignore waypoints.");
+      return;
+    }
+    if (exec_state_ == EMERGENCY_STOP)
+    {
+      ROS_WARN("[presetWaypointsCallback] In EMERGENCY_STOP, ignore waypoints; resend after the robot has stopped.");
+      return;
+    }
+
+    // z is used as-is, same as keypoint.yaml: it must already be the body
+    // height above ground (body_height is NOT added, unlike navi_mode=3's
+    // pathCallback).
+    preset_waypoints_.clear();
+    preset_waypoints_.reserve(msg->poses.size());
+    for (const auto &pose_stamped : msg->poses)
+      preset_waypoints_.emplace_back(pose_stamped.pose.position.x,
+                                     pose_stamped.pose.position.y,
+                                     pose_stamped.pose.position.z);
+    waypoint_num_ = static_cast<int>(preset_waypoints_.size());
+
+    ROS_INFO("[presetWaypointsCallback] Received %d waypoints, starting a new round.", waypoint_num_);
+    planGlobalTrajbyGivenWps();
   }
 
   void SCANReplanFSM::rvizGoalCallback(const geometry_msgs::PoseStampedConstPtr &msg)

@@ -90,7 +90,7 @@ namespace scan_planner
     /* ROS utils */
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
-    ros::Subscriber goal_sub_, odom_sub_, path_sub_, go2_execution_frozen_sub_;
+    ros::Subscriber goal_sub_, odom_sub_, path_sub_, waypoints_sub_, go2_execution_frozen_sub_;
     ros::Publisher replan_pub_, new_pub_, bspline_pub_, data_disp_pub_, self_inflation_pub_;
 
     /* helper functions */
@@ -122,6 +122,7 @@ namespace scan_planner
     void rvizGoalCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void waypointCallback(const nav_msgs::PathConstPtr &msg);
     void pathCallback(const nav_msgs::PathConstPtr &msg);
+    void presetWaypointsCallback(const nav_msgs::PathConstPtr &msg);
     void odometryCallback(const nav_msgs::OdometryConstPtr &msg);
     void go2ExecutionFrozenCallback(const std_msgs::BoolConstPtr &msg);
 
