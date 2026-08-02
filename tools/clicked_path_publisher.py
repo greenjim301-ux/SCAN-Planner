@@ -15,18 +15,18 @@ rviz 操作(Fixed Frame 需为 world):
 rviz 里 Add -> Marker,话题选 /clicked_path_vis 即可实时查看。
 
 注意:
-- mode=path: z 直接取点击处的高度,planner 的 pathCallback 会自动加 body_height,
-  这里不用考虑机体高度;2D Nav Goal 本身 z 恒为 0,所以终点的 z 取最后一个
-  Publish Point 的 z。
-- mode=keypoint: navi_mode=2 的 waypoint z 不加 body_height(应为机体中心高度,
-  如 keypoint_recorder 记录的 odom z),而点击点落在地面 z≈0,所以发布/写盘时
-  每个点的 z 会加上 --z-offset(默认 0.5)。收尾时同时做两件事:
+- 点击处的 z 一律不使用:点击很容易落在障碍物/天花板上,会造出到不了的空中
+  目标。两种模式的 z 都取固定值,点击只提供 xy(俯视图下点哪就是哪,误点
+  天花板也只是取了该处的 xy,无害)。rviz 显示上仍建议用 map_pub 的
+  pcd_z_min/pcd_z_max 把天花板切掉,便于看清地面。
+- mode=path: 所有路径点 z 统一取 --path-z(默认 0.0,地面高度),navi_mode=3
+  的 planner 的 pathCallback 会自动加 body_height。
+- mode=keypoint: 所有 waypoint 的 z 统一取 --waypoint-z(默认 0.35,机体中心
+  高度),navi_mode=2 不加 body_height。收尾时同时做两件事:
   (a) 发布到 --waypoints-topic(默认 /preset_waypoints),正在跑的 navi_mode=2
       planner 收到即开始新一轮(到达终点后回到 WAIT_TARGET,可反复发);
   (b) 写 keypoint.yaml 留档(planner 目前启动时不加载它,仅作记录)。
-- 误点天花板保护:z 超过 --max-z(默认 1.0)的点击视为点到了高处,z 自动回退
-  为上一个点的 z(第一个点回退为 --default-z,默认 0.5)。配合 map_pub 的
-  pcd_z_min/pcd_z_max 把天花板从 rviz 显示里切掉效果更好。
+- 本脚本只适用于单层平面场景,多层楼请用 keypoint_recorder 遛狗录点。
 - mode=path 时 planner 要求路径至少 2 个点,所以至少先 Publish Point 点 1 个,
   再用 2D Nav Goal 收尾;第一个点建议放在机器狗当前位置附近(全局参考轨迹从
   路径第一个点起算)。mode=keypoint 允许只用 2D Nav Goal 点 1 个 waypoint。
@@ -68,9 +68,8 @@ class ClickedPathPublisher(object):
     def __init__(self, args):
         self.mode = args.mode
         self.frame = args.frame
-        self.max_z = args.max_z
-        self.default_z = args.default_z
-        self.z_offset = args.z_offset
+        # 点击 z 一律不用(容易点在障碍物/天花板上),两种模式都用固定 z
+        self.fixed_z = args.waypoint_z if args.mode == "keypoint" else args.path_z
         self.output_path = args.output
         self.points = []  # [(x, y, z), ...]
         self.path_pub = None
@@ -86,14 +85,7 @@ class ClickedPathPublisher(object):
         rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.reset_cb)
 
     def point_cb(self, msg):
-        z = msg.point.z
-        if z > self.max_z:
-            # 点到了天花板/货架顶等高处,回退到上一个点的高度(没有就用 default_z)
-            z_fallback = self.points[-1][2] if self.points else self.default_z
-            rospy.logwarn("点击点 z=%.2f 超过 --max-z=%.2f,视为误点高处,z 回退为 %.2f",
-                          msg.point.z, self.max_z, z_fallback)
-            z = z_fallback
-        p = (msg.point.x, msg.point.y, z)
+        p = (msg.point.x, msg.point.y, self.fixed_z)
         self.points.append(p)
         rospy.loginfo("加入第 %d 个路径点 [%.2f, %.2f, %.2f]", len(self.points), p[0], p[1], p[2])
         self.publish_vis()
@@ -102,9 +94,7 @@ class ClickedPathPublisher(object):
         if not self.points and self.mode == "path":
             rospy.logwarn("还没有 Publish Point 点出的路径点,至少先点 1 个再用 2D Nav Goal 收尾")
             return
-        # 2D Nav Goal 的 z 恒为 0,终点 z 沿用最后一个点击点的高度
-        end_z = self.points[-1][2] if self.points else self.default_z
-        end = (msg.pose.position.x, msg.pose.position.y, end_z)
+        end = (msg.pose.position.x, msg.pose.position.y, self.fixed_z)
         pts = self.points + [end]
 
         if self.mode == "path":
@@ -134,9 +124,6 @@ class ClickedPathPublisher(object):
         rospy.loginfo("已发布 %d 点路径到 %s,清空待选点,可开始画下一条", len(pts), self.path_pub.name)
 
     def save_keypoint_yaml(self, pts):
-        # navi_mode=2 使用的 z 是机体中心高度,点击点在地面上,统一加 z_offset
-        pts = [(x, y, z + self.z_offset) for x, y, z in pts]
-
         lines = ["fsm:", "  waypoint_num: {}".format(len(pts))]
         for index, (x, y, z) in enumerate(pts):
             lines.append("  waypoint{}_x: {}".format(index, format_float(x)))
@@ -145,9 +132,9 @@ class ClickedPathPublisher(object):
         atomic_write(self.output_path, "\n".join(lines) + "\n")
 
         self.wp_pub.publish(self.make_path(pts))
-        rospy.loginfo("已发布 %d 个 waypoint 到 %s(z 已加偏移 %.2f),planner 收到即开始新一轮;"
-                      "同时写入 %s 供 planner 重启后首轮使用",
-                      len(pts), self.wp_pub.name, self.z_offset, self.output_path)
+        rospy.loginfo("已发布 %d 个 waypoint 到 %s(z 统一取 %.2f),planner 收到即开始新一轮;"
+                      "同时写入 %s 留档",
+                      len(pts), self.wp_pub.name, self.fixed_z, self.output_path)
 
     def reset_cb(self, _msg):
         self.points = []
@@ -195,13 +182,12 @@ def main():
     parser.add_argument("--waypoints-topic", default="/preset_waypoints",
                         help="mode=keypoint 时发布 waypoints 的话题(navi_mode=2 planner 订阅)")
     parser.add_argument("--frame", default="world", help="路径坐标系(应与 rviz Fixed Frame 一致)")
-    parser.add_argument("--max-z", type=float, default=1.0,
-                        help="点击点 z 超过该值视为误点天花板,回退到上一个点的 z(默认 1.0 m)")
-    parser.add_argument("--default-z", type=float, default=0.5,
-                        help="第一个点就误点高处时的回退 z(默认 0.5 m)")
-    parser.add_argument("--z-offset", type=float, default=0.5,
-                        help="mode=keypoint 写盘时加到每个点 z 上的偏移;navi_mode=2 不加 "
-                             "body_height,waypoint z 应为机体中心高度(默认 0.5 m)")
+    parser.add_argument("--waypoint-z", type=float, default=0.35,
+                        help="mode=keypoint 时所有 waypoint 统一使用的 z(机体中心高度,"
+                             "navi_mode=2 不加 body_height,默认 0.35 m)")
+    parser.add_argument("--path-z", type=float, default=0.0,
+                        help="mode=path 时所有路径点统一使用的 z(地面高度,navi_mode=3 "
+                             "的 planner 会自动加 body_height,默认 0.0 m)")
     args = parser.parse_args(rospy.myargv()[1:])
 
     rospy.init_node("clicked_path_publisher")

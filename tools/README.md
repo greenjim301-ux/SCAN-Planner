@@ -19,12 +19,14 @@ In rviz (Fixed Frame must be `world`):
 - `2D Pose Estimate`: discard the current buffer and start over.
 
 Collected points are visualized on `/clicked_path_vis` (add a `Marker` display).
-The final point inherits the z of the last clicked point since 2D Nav Goal
-always has z = 0.
+Clicked z is never used — clicks easily land on obstacles or the ceiling and
+would create unreachable goals in the air, so clicks only provide xy and every
+point gets a fixed z per mode.
 
-- `--mode path` (default): publishes `nav_msgs/Path` on `/initial_path`.
-  Clicked z values are used as-is (the planner adds `body_height` itself).
-  Needs at least 1 `Publish Point` before the closing 2D Nav Goal.
+- `--mode path`: publishes `nav_msgs/Path` on `/initial_path`. Every point
+  gets `--path-z` (default 0.0 m, ground level; the `navi_mode=3` planner
+  adds `body_height` itself). Needs at least 1 `Publish Point` before the
+  closing 2D Nav Goal.
 - `--mode keypoint`: on the closing 2D Nav Goal it does two things:
   publishes the waypoints as `nav_msgs/Path` on `/preset_waypoints`
   (`--waypoints-topic`) — a running `navi_mode=2` planner starts a new round
@@ -32,26 +34,25 @@ always has z = 0.
   `WAIT_TARGET`, so you can keep sending rounds; and writes
   `tools/keypoint.yaml` (`--output`, same format as `keypoint_recorder.py`)
   as a record — the planner currently does NOT load it at startup, it just
-  waits on the topic. `navi_mode=2` does NOT add `body_height` to waypoints,
-  so `--z-offset` (default 0.5 m) is added to every clicked z. A single
-  2D Nav Goal with no prior clicks is allowed (one-waypoint mission,
-  z = `--default-z` + `--z-offset`). New waypoints sent mid-mission replace
-  the current round; they are ignored during `EMERGENCY_STOP` (resend after
-  the robot stops).
+  waits on the topic. Every waypoint gets `--waypoint-z` (default 0.35 m,
+  body-center height; `navi_mode=2` does NOT add `body_height`). A single
+  2D Nav Goal with no prior clicks is allowed (one-waypoint mission). New
+  waypoints sent mid-mission replace the current round; they are ignored
+  during `EMERGENCY_STOP` (resend after the robot stops).
+
+Click-based collection is for single-floor scenes — record multi-floor
+waypoints by walking the robot with `keypoint_recorder.py`.
 
 Do not run this script alongside a `navi_mode=1`/`3` planner you don't intend
 to feed — they also consume `/move_base_simple/goal`. The `navi_mode=2`
 planner only listens on `/preset_waypoints`, so running it while you collect
 is exactly the intended workflow.
 
-Clicking on ceiling points is guarded twice:
-
-- clicks with z above `--max-z` (default 1.0 m) fall back to the previous
-  point's z (`--default-z`, default 0.5 m, for the first point);
-- the displayed PCD map can drop the ceiling entirely: pass
-  `pcd_z_min:=-0.5 pcd_z_max:=1.5` to `run.launch` and `map_pub` band-passes
-  the cloud in z before publishing, so clicks land on the floor
-  (`pcd_z_max <= pcd_z_min` disables the filter).
+Since clicked z is ignored, clicking the ceiling is harmless (it just takes
+that spot's xy). For a clearer top-down view the displayed PCD map can still
+drop the ceiling: pass `pcd_z_min:=-0.5 pcd_z_max:=1.5` to `run.launch` and
+`map_pub` band-passes the cloud in z before publishing
+(`pcd_z_max <= pcd_z_min` disables the filter).
 
 # keypoint_recorder.py
 
