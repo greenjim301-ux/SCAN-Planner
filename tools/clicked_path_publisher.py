@@ -74,12 +74,13 @@ class ClickedPathPublisher(object):
         self.points = []  # [(x, y, z), ...]
         self.path_pub = None
         self.wp_pub = None
+        # 全部不 latch:latch 会让后启动/重启的节点立刻收到旧消息(planner 收到旧任务
+        # 会自行起步,有安全隐患),代价是接收方必须先于发布时刻在线
         if self.mode == "path":
-            self.path_pub = rospy.Publisher(args.path_topic, Path, queue_size=1, latch=True)
+            self.path_pub = rospy.Publisher(args.path_topic, Path, queue_size=1)
         else:
-            # 故意不 latch:latch 会让后启动的 planner 立刻收到旧任务而自行起步
             self.wp_pub = rospy.Publisher(args.waypoints_topic, Path, queue_size=1)
-        self.vis_pub = rospy.Publisher("/clicked_path_vis", Marker, queue_size=4, latch=True)
+        self.vis_pub = rospy.Publisher("/clicked_path_vis", Marker, queue_size=4)
         rospy.Subscriber("/clicked_point", PointStamped, self.point_cb)
         rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_cb)
         rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.reset_cb)
