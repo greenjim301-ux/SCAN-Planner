@@ -18,7 +18,13 @@
   <arg name="planning_horizon" default="3.5"/>
 
   <!-- main node -->
-  <node pkg="scan_planner" name="scan_planner_node" type="scan_planner_node" output="screen" clear_params="true">
+  <!-- required="true": 规划器退出时把整组节点一起带走。closed_loop_controller 是
+       独立进程，它一旦收到过 bspline 就不再依赖规划器——会继续按最后那条轨迹
+       100Hz 发 cmd_vel（走完轨迹后仍在用 kp_pos 追终点，朝向误差大时还会原地
+       转），而 unitree_bridge 的看门狗只在 cmd_vel 停发时才刹停，对这种"上游还
+       活着但在发陈旧指令"的情况无能为力。让 roslaunch 连坐把控制器也杀掉，
+       cmd_vel 断流，看门狗才能接管。 -->
+  <node pkg="scan_planner" name="scan_planner_node" type="scan_planner_node" output="screen" clear_params="true" required="true">
     <remap from="/grid_map/body_pose" to="$(arg body_pose_topic)"/>
     <remap from="/grid_map/sensor_pose" to="$(arg sensor_pose_topic)"/>
     <param name="grid_map/sensor_type" value="$(arg sensor_type)" type="str"/>
