@@ -793,19 +793,20 @@ namespace scan_planner
 
     if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
     {
-      // Anchor the replan at the robot's actual pose instead of the virtual
-      // point on the current trajectory. Tracking lag between the two never
-      // gets corrected otherwise, so avoidance and collision checking would
-      // act on a position the robot is not at. The global reference is still
-      // kept untouched; getLocalTarget() re-projects odom onto it.
-      setStartStateFromOdomOrCurrentTraj();
+      start_pt_ = info->position_traj_.evaluateDeBoorT(t_cur);
+      start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
+      start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
 
-      auto result = callReboundReplan(true, false);
+      auto result = callReboundReplan(false, false);
       if (result != SCANPlannerManager::ReplanResult::SUCCESS)
       {
-        result = callReboundReplan(true, true);
+        result = callReboundReplan(true, false);
         if (result != SCANPlannerManager::ReplanResult::SUCCESS)
-          return false;
+        {
+          result = callReboundReplan(true, true);
+          if (result != SCANPlannerManager::ReplanResult::SUCCESS)
+            return false;
+        }
       }
 
       return true;
