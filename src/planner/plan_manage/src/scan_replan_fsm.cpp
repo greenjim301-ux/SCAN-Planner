@@ -54,6 +54,7 @@ namespace scan_planner
     go2_execution_frozen_sub_ = nh.subscribe("/planning/go2_execution_frozen", 10, &SCANReplanFSM::go2ExecutionFrozenCallback, this);
 
     bspline_pub_ = nh.advertise<scan_planner::Bspline>("/planning/bspline", 10);
+    stop_pub_ = nh.advertise<std_msgs::Empty>("/planning/stop", 10);
     data_disp_pub_ = nh.advertise<scan_planner::DataDisp>("/planning/data_display", 100);
     self_inflation_pub_ = nh.advertise<visualization_msgs::Marker>("self_inflation", 10, true);
 
@@ -972,36 +973,13 @@ namespace scan_planner
 
   bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
-
+    // Keeps local_data_ consistent (e.g. checkCollisionCallback's
+    // info->start_time_ guard) without pushing a fake "stay here" trajectory
+    // through the normal bspline pipeline -- the actual stop is commanded via
+    // stop_pub_ below, which is the sole start/stop gate on the controller side.
     planner_manager_->EmergencyStop(stop_pos);
 
-    auto info = &planner_manager_->local_data_;
-
-    /* publish traj */
-    scan_planner::Bspline bspline;
-    bspline.order = 3;
-    bspline.start_time = info->start_time_;
-    bspline.traj_id = info->traj_id_;
-
-    Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
-    bspline.pos_pts.reserve(pos_pts.cols());
-    for (int i = 0; i < pos_pts.cols(); ++i)
-    {
-      geometry_msgs::Point pt;
-      pt.x = pos_pts(0, i);
-      pt.y = pos_pts(1, i);
-      pt.z = pos_pts(2, i);
-      bspline.pos_pts.push_back(pt);
-    }
-
-    Eigen::VectorXd knots = info->position_traj_.getKnot();
-    bspline.knots.reserve(knots.rows());
-    for (int i = 0; i < knots.rows(); ++i)
-    {
-      bspline.knots.push_back(knots(i));
-    }
-
-    bspline_pub_.publish(bspline);
+    stop_pub_.publish(std_msgs::Empty());
 
     return true;
   }

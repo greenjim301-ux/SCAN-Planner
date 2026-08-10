@@ -8,6 +8,7 @@
 #include <nav_msgs/Odometry.h>
 #include <ros/ros.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Empty.h>
 #include <tf/tf.h>
 
 #include "bspline_opt/uniform_bspline.h"
@@ -23,6 +24,7 @@ ros::Publisher cmd_vel_pub;
 ros::Publisher execution_frozen_pub;
 ros::Subscriber bspline_sub;
 ros::Subscriber odom_sub;
+ros::Subscriber stop_sub;
 ros::Timer cmd_timer;
 
 bool receive_traj = false;
@@ -161,6 +163,15 @@ void bsplineCallback(const scan_planner::BsplineConstPtr &msg)
   ROS_WARN("[closed_loop_controller] received bspline traj_id=%d duration=%.3f", traj_id, traj_duration);
 }
 
+void stopCallback(const std_msgs::EmptyConstPtr &)
+{
+  // receive_traj is the sole start/stop gate: clearing it here (rather than
+  // adding a second flag) reuses the exact same "no traj -> publishStop()"
+  // path that cmdCallback already takes at startup / before the first bspline.
+  receive_traj = false;
+  ROS_WARN("[closed_loop_controller] received stop signal, halting trajectory tracking.");
+}
+
 void odomCallback(const nav_msgs::OdometryConstPtr &msg)
 {
   odom_pos(0) = msg->pose.pose.position.x;
@@ -236,6 +247,7 @@ int main(int argc, char **argv)
 
   bspline_sub = node.subscribe("planning/bspline", 10, bsplineCallback);
   odom_sub = node.subscribe(body_pose_topic, 20, odomCallback, ros::TransportHints().tcpNoDelay());
+  stop_sub = node.subscribe("planning/stop", 10, stopCallback);
   cmd_vel_pub = node.advertise<geometry_msgs::Twist>("cmd_vel", 20);
   execution_frozen_pub = node.advertise<std_msgs::Bool>("planning/go2_execution_frozen", 10);
   cmd_timer = node.createTimer(ros::Duration(0.01), cmdCallback);
