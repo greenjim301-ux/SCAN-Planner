@@ -28,6 +28,10 @@ namespace scan_planner
     nh.param("fsm/emergency_time_", emergency_time_, 1.0);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/max_replan_fail_count", max_replan_fail_count_, 1000);
+    // Must stay comfortably above reboundReplan()'s hard "too close to goal" rejection
+    // radius (0.2 m, see planner_manager.cpp) so odom jitter between this check and the
+    // actual replan call never lands back inside the rejection zone.
+    nh.param("fsm/waypoint_arrival_radius", waypoint_arrival_radius_, 0.3);
     nh.param("grid_map/obstacles_inflation_z_up", self_inflation_z_up_, 0.0);
     nh.param("grid_map/obstacles_inflation_z_down", self_inflation_z_down_, 0.0);
     nh.param("grid_map/double_cylinder_radius", self_double_cylinder_radius_, 0.0);
@@ -246,12 +250,17 @@ namespace scan_planner
 
   bool SCANReplanFSM::planNextWaypoint()
   {
-    // Skip waypoints already inside the 0.5 m arrival radius: reboundReplan
-    // rejects goals closer than 0.2 m, which would loop GEN_NEW_TRAJ forever.
+    // Only guard against near-duplicate waypoints here: planGlobalTraj()'s
+    // one_segment_traj_gen() is singular at ~zero distance/time. Whether a
+    // waypoint is "too close to usefully plan to" is reboundReplan()'s call
+    // (it knows its own minimum planning distance) -- execFSMCallback() reacts
+    // to ReplanResult::TOO_CLOSE_TO_GOAL by advancing to the next waypoint
+    // instead of guessing the distance here and retrying GEN_NEW_TRAJ forever.
+    constexpr double kDegenerateDist = 0.05;
     while (current_wp_ >= 0 && current_wp_ < (int)active_waypoints_.size() &&
-           (active_waypoints_[current_wp_] - odom_pos_).norm() < 0.5)
+           (active_waypoints_[current_wp_] - odom_pos_).norm() < kDegenerateDist)
     {
-      ROS_INFO("[navi_mode=%d] Waypoint %d/%zu is within 0.5 m of current position, skip it.",
+      ROS_INFO("[navi_mode=%d] Waypoint %d/%zu coincides with current position, skip it.",
                navi_mode_, current_wp_ + 1, active_waypoints_.size());
       current_wp_++;
     }
@@ -599,13 +608,41 @@ namespace scan_planner
       else
         flag_random_poly_init = true;
 
-      bool success = callReboundReplan(true, flag_random_poly_init);
-      if (success)
+      auto result = callReboundReplan(true, flag_random_poly_init);
+      if (result == SCANPlannerManager::ReplanResult::SUCCESS)
       {
 
         replan_fail_count_ = 0;
         changeFSMExecState(EXEC_TRAJ, "FSM");
         flag_escape_emergency_ = true;
+      }
+      else if (result == SCANPlannerManager::ReplanResult::TOO_CLOSE_TO_GOAL)
+      {
+        // We're already at the current target -- reboundReplan says so, not a
+        // distance guess made ahead of time.
+        if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
+        {
+          ROS_INFO("[navi_mode=%d] Waypoint %d/%zu already reached, advancing.",
+                   navi_mode_, current_wp_ + 1, active_waypoints_.size());
+          current_wp_++;
+          if (!planNextWaypoint())
+            replan_fail_count_++;
+          changeFSMExecState(GEN_NEW_TRAJ, "FSM");
+        }
+        else
+        {
+          // Final target (or the only waypoint) is already reached before any
+          // trajectory was produced -- done, no need to keep replanning to it.
+          if (isWaypointSequenceMode())
+          {
+            active_waypoints_.clear();
+            current_wp_ = 0;
+          }
+          ROS_INFO("[navi_mode=%d] Target already reached.", navi_mode_);
+          replan_fail_count_ = 0;
+          have_target_ = false;
+          changeFSMExecState(WAIT_TARGET, "FSM");
+        }
       }
       else
       {
@@ -644,7 +681,7 @@ namespace scan_planner
 
       if (isWaypointSequenceMode() &&
           current_wp_ + 1 < (int)active_waypoints_.size() &&
-          (end_pt_ - odom_pos_).norm() < 0.5)
+          (end_pt_ - odom_pos_).norm() < waypoint_arrival_radius_)
       {
         current_wp_++;
         if (planNextWaypoint())
@@ -763,11 +800,11 @@ namespace scan_planner
       // kept untouched; getLocalTarget() re-projects odom onto it.
       setStartStateFromOdomOrCurrentTraj();
 
-      bool success = callReboundReplan(true, false);
-      if (!success)
+      auto result = callReboundReplan(true, false);
+      if (result != SCANPlannerManager::ReplanResult::SUCCESS)
       {
-        success = callReboundReplan(true, true);
-        if (!success)
+        result = callReboundReplan(true, true);
+        if (result != SCANPlannerManager::ReplanResult::SUCCESS)
           return false;
       }
 
@@ -800,11 +837,11 @@ namespace scan_planner
     if (!adjustGlobalTargetIfOccupied())
       return false;
 
-    bool success = callReboundReplan(true, false);
-    if (!success)
+    auto result = callReboundReplan(true, false);
+    if (result != SCANPlannerManager::ReplanResult::SUCCESS)
     {
-      success = callReboundReplan(true, true);
-      if (!success)
+      result = callReboundReplan(true, true);
+      if (result != SCANPlannerManager::ReplanResult::SUCCESS)
         return false;
     }
 
@@ -884,18 +921,18 @@ namespace scan_planner
     }
   }
 
-  bool SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
+  SCANPlannerManager::ReplanResult SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
 
     getLocalTarget();
 
-    bool plan_success =
+    SCANPlannerManager::ReplanResult plan_result =
         planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_, (have_new_target_ || flag_use_poly_init), flag_randomPolyTraj);
     have_new_target_ = false;
 
-    cout << "final_plan_success=" << plan_success << endl;
+    cout << "final_plan_result=" << static_cast<int>(plan_result) << endl;
 
-    if (plan_success)
+    if (plan_result == SCANPlannerManager::ReplanResult::SUCCESS)
     {
 
       auto info = &planner_manager_->local_data_;
@@ -929,7 +966,7 @@ namespace scan_planner
       visualization_->displayOptimalTraj(info->position_traj_, 0);
     }
 
-    return plan_success;
+    return plan_result;
   }
 
   bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)

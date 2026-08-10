@@ -74,7 +74,7 @@ namespace scan_planner
 
   // SECTION rebond replanning
 
-  bool SCANPlannerManager::reboundReplan(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel,
+  SCANPlannerManager::ReplanResult SCANPlannerManager::reboundReplan(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel,
                                         Eigen::Vector3d start_acc, Eigen::Vector3d local_target_pt,
                                         Eigen::Vector3d local_target_vel, bool flag_polyInit, bool flag_randomPolyTraj)
   {
@@ -90,7 +90,7 @@ namespace scan_planner
     {
       cout << "Close to goal" << endl;
       continuous_failures_count_++;
-      return false;
+      return ReplanResult::TOO_CLOSE_TO_GOAL;
     }
 
     ros::Time t_start = ros::Time::now();
@@ -202,7 +202,7 @@ namespace scan_planner
             {
               ROS_ERROR("pseudo_arc_length is empty, return!");
               continuous_failures_count_++;
-              return false;
+              return ReplanResult::FAILURE;
             }
           }
         }
@@ -266,7 +266,7 @@ namespace scan_planner
     {
       // visualization_->displayOptimalList( ctrl_pts, vis_id );
       continuous_failures_count_++;
-      return false;
+      return ReplanResult::FAILURE;
     }
     //visualization_->displayOptimalList( ctrl_pts, vis_id );
 
@@ -293,7 +293,7 @@ namespace scan_planner
     {
       printf("\033[34mThis refined trajectory is unsafe or dynamically infeasible. Skip publishing it.\n\033[0m");
       continuous_failures_count_++;
-      return false;
+      return ReplanResult::FAILURE;
     }
 
     t_refine = ros::Time::now() - t_start;
@@ -305,7 +305,7 @@ namespace scan_planner
 
     // success. YoY
     continuous_failures_count_ = 0;
-    return true;
+    return ReplanResult::SUCCESS;
   }
 
   bool SCANPlannerManager::EmergencyStop(Eigen::Vector3d stop_pos)
