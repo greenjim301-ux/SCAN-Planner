@@ -60,10 +60,10 @@
     <node unless="$(arg is_real_world)" pkg="scan_planner" name="go2_kinematic_sim" type="go2_kinematic_sim" output="screen"/>
   </group>
 
-  <!-- go2 model -->
-  <param name="robot_description" textfile="$(find go2_description)/urdf/go2_description.urdf" />
-  <node pkg="robot_state_publisher" type="robot_state_publisher" name="go2_robot_state_publisher" output="screen"/>
-  <node pkg="scan_planner" name="go2_gait_publisher" type="go2_gait_publisher" output="screen"/>
+  <!-- go2 model: procedurally-animated leg joints for rviz only, not consumed by planning/control -->
+  <param name="robot_description" textfile="$(find go2_description)/urdf/go2_description.urdf" unless="$(arg is_real_world)"/>
+  <node unless="$(arg is_real_world)" pkg="robot_state_publisher" type="robot_state_publisher" name="go2_robot_state_publisher" output="screen"/>
+  <node unless="$(arg is_real_world)" pkg="scan_planner" name="go2_gait_publisher" type="go2_gait_publisher" output="screen"/>
 
   <!-- use simulator -->
   <include file="$(find scan_planner)/launch/simulator.xml">

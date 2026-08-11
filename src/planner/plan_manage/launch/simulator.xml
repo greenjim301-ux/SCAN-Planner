@@ -73,7 +73,7 @@
 
   </node>
 
-  <node pkg="odom_visualization" name="odom_visualization" type="odom_visualization" output="screen"/>
+  <node unless="$(arg is_real_world)" pkg="odom_visualization" name="odom_visualization" type="odom_visualization" output="screen"/>
 
   <group ns="pcl_render_node">
         <param name="sensor_type" value="$(arg sensor_type)" />
