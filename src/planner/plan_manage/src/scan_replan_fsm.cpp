@@ -52,6 +52,7 @@ namespace scan_planner
     ros::param::param<std::string>("/body_pose_topic", body_pose_topic, std::string("/quad_0/body_pose"));
     odom_sub_ = nh.subscribe(body_pose_topic, 1, &SCANReplanFSM::odometryCallback, this);
     go2_execution_frozen_sub_ = nh.subscribe("/planning/go2_execution_frozen", 10, &SCANReplanFSM::go2ExecutionFrozenCallback, this);
+    user_emergency_stop_sub_ = nh.subscribe("/planning/emergency_stop", 1, &SCANReplanFSM::userEmergencyStopCallback, this);
 
     bspline_pub_ = nh.advertise<scan_planner::Bspline>("/planning/bspline", 10);
     stop_pub_ = nh.advertise<std_msgs::Empty>("/planning/stop", 10);
@@ -451,6 +452,26 @@ namespace scan_planner
   void SCANReplanFSM::go2ExecutionFrozenCallback(const std_msgs::BoolConstPtr &msg)
   {
     go2_execution_frozen_ = msg->data;
+  }
+
+  void SCANReplanFSM::userEmergencyStopCallback(const std_msgs::EmptyConstPtr &msg)
+  {
+    if (exec_state_ == EMERGENCY_STOP)
+    {
+      ROS_WARN("[userEmergencyStopCallback] Already in EMERGENCY_STOP, ignore.");
+      return;
+    }
+
+    ROS_WARN("User requested emergency stop!");
+
+    // Mirrors finishProcess(): after a deliberate user stop, don't let the FSM
+    // silently resume toward the old goal once velocity settles -- require a
+    // fresh target. Setting flag_escape_emergency_ here (rather than relying on
+    // it already being true) makes this safe to call from any state, including
+    // ones where a prior EMERGENCY_STOP tick already cleared it.
+    need_hover_stop_ = true;
+    flag_escape_emergency_ = true;
+    changeFSMExecState(EMERGENCY_STOP, "USER_REQUEST");
   }
 
   void SCANReplanFSM::updateLocalTrajTimeFreeze()
