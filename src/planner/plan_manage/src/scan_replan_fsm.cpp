@@ -946,7 +946,8 @@ namespace scan_planner
 
   SCANPlannerManager::ReplanResult SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
-
+    // bound planning horizon and get local target point with no occ
+    // if target still in occ, choose the nearest point from start
     getLocalTarget();
 
     SCANPlannerManager::ReplanResult plan_result =

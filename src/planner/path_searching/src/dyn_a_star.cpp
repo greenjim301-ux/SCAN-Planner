@@ -93,11 +93,19 @@ vector<GridNodePtr> AStar::retrievePath(GridNodePtr current)
 bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d end_pt, Vector3i &start_idx, Vector3i &end_idx)
 {
     if (!Coord2Index(start_pt, start_idx) || !Coord2Index(end_pt, end_idx))
+    {
+        ROS_ERROR("[Astar] Initial start/end point out of the search pool: start=(%.2f %.2f %.2f) end=(%.2f %.2f %.2f).",
+                  start_pt(0), start_pt(1), start_pt(2), end_pt(0), end_pt(1), end_pt(2));
         return false;
+    }
 
     Eigen::Vector3d start_to_end = end_pt - start_pt;
     if (start_to_end.norm() < 1e-6)
+    {
+        ROS_WARN("[Astar] Start and end point are the same, cannot determine a search direction: pt=(%.2f %.2f %.2f).",
+                 start_pt(0), start_pt(1), start_pt(2));
         return false;
+    }
     const double path_yaw = std::atan2(start_to_end(1), start_to_end(0));
     start_to_end.normalize();
 
@@ -109,7 +117,11 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         {
             start_pt -= start_to_end * step_size_;
             if (!Coord2Index(start_pt, start_idx))
+            {
+                ROS_ERROR("[Astar] Ran out of pool while walking the start point out of an obstacle: last tried pt=(%.2f %.2f %.2f).",
+                          start_pt(0), start_pt(1), start_pt(2));
                 return false;
+            }
 
             occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
             if (occ == -1)
@@ -128,7 +140,11 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         {
             end_pt += start_to_end * step_size_;
             if (!Coord2Index(end_pt, end_idx))
+            {
+                ROS_ERROR("[Astar] Ran out of pool while walking the end point out of an obstacle: last tried pt=(%.2f %.2f %.2f).",
+                          end_pt(0), end_pt(1), end_pt(2));
                 return false;
+            }
 
             occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
             if (occ == -1)
