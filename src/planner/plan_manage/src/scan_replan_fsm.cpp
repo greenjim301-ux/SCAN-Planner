@@ -861,7 +861,13 @@ namespace scan_planner
       return false;
 
     auto result = callReboundReplan(true, false);
-    if (result != SCANPlannerManager::ReplanResult::SUCCESS)
+    if( result == SCANPlannerManager::ReplanResult::TOO_CLOSE_TO_GOAL 
+      && (navi_mode_ == NAVI_MODE::MANUAL_TARGET || isWaypointSequenceMode()))
+    {
+      ROS_INFO("Target already reached, no need to replan.");
+      return true;
+    }
+    else if (result != SCANPlannerManager::ReplanResult::SUCCESS)
     {
       result = callReboundReplan(true, true);
       if (result != SCANPlannerManager::ReplanResult::SUCCESS)
