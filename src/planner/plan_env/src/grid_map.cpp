@@ -145,7 +145,8 @@ void GridMap::initMap(ros::NodeHandle &nh)
       node_.subscribe<nav_msgs::Odometry>("/grid_map/body_pose", 50, &GridMap::slidingMapFrameCallback, this);
 
   occ_timer_ = node_.createTimer(ros::Duration(0.05), &GridMap::updateOccupancyCallback, this);
-  vis_timer_ = node_.createTimer(ros::Duration(0.05), &GridMap::visCallback, this);
+  // change to 10hz for now
+  vis_timer_ = node_.createTimer(ros::Duration(0.1), &GridMap::visCallback, this);
 
   map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupancy", 10);
   map_inf_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupancy_inflate", 10);
