@@ -15,7 +15,7 @@
   <!-- public parameters -->
   <arg name="max_vel" default="0.75"/>
   <arg name="max_acc" default="0.5"/>
-  <arg name="planning_horizon" default="3.5"/>
+  <arg name="planning_horizon" default="5.0"/>
 
   <!-- main node -->
   <!-- required="true": 规划器退出时把整组节点一起带走。closed_loop_controller 是
