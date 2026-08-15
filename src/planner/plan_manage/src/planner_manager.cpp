@@ -76,8 +76,13 @@ namespace scan_planner
 
   SCANPlannerManager::ReplanResult SCANPlannerManager::reboundReplan(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel,
                                         Eigen::Vector3d start_acc, Eigen::Vector3d local_target_pt,
-                                        Eigen::Vector3d local_target_vel, bool flag_polyInit, bool flag_randomPolyTraj)
+                                        Eigen::Vector3d local_target_vel, double start_yaw, bool flag_polyInit, bool flag_randomPolyTraj)
   {
+    // Fallback heading for the optimizer's degenerate-segment yaw estimate (two
+    // near-coincident sampled points, e.g. right at a stationary clamped start) --
+    // without this it silently defaults to world 0 deg instead of the robot's real
+    // heading, which can point the double-cylinder collision check the wrong way.
+    bspline_optimizer_rebound_->setCurrentYaw(start_yaw);
 
     static int count = 0;
     std::cout << endl

@@ -54,6 +54,14 @@ namespace scan_planner
     /* main API */
     void setEnvironment(const GridMap::Ptr &env);
     void setParam(ros::NodeHandle &nh);
+
+    // Fallback heading for estimateSegmentYaw()/estimateControlPointYaw() when two
+    // sampled points are (near-)coincident and no direction can be derived from them
+    // (e.g. the trajectory is stationary right at the clamped start). Must be kept in
+    // sync with the robot's actual current heading before each replan -- otherwise the
+    // degenerate case silently tests the double-cylinder collision footprint against an
+    // arbitrary direction instead of the robot's real one.
+    void setCurrentYaw(double yaw) { current_yaw_ = yaw; }
     Eigen::MatrixXd BsplineOptimizeTraj(const Eigen::MatrixXd &points, const double &ts,
                                         const int &cost_function, int max_num_id, int max_time_id);
 
@@ -117,6 +125,8 @@ namespace scan_planner
     //
     double dist0_;             // safe distance
     double max_vel_, max_acc_; // dynamic limits
+
+    double current_yaw_ = 0.0; // fallback heading, see setCurrentYaw()
 
     int variable_num_;              // optimization variables
     int iter_num_;                  // iteration of the solver

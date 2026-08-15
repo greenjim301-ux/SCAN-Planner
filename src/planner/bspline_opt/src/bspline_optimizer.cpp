@@ -30,7 +30,7 @@ namespace scan_planner
   {
     Eigen::Vector2d diff(to(0) - from(0), to(1) - from(1));
     if (diff.squaredNorm() < 1e-8)
-      return 0.0;
+      return current_yaw_; // no direction to derive from two coincident points, use the robot's real heading
     return std::atan2(diff(1), diff(0));
   }
 
