@@ -56,6 +56,7 @@ namespace scan_planner
 
     bspline_pub_ = nh.advertise<scan_planner::Bspline>("/planning/bspline", 10);
     stop_pub_ = nh.advertise<std_msgs::Empty>("/planning/stop", 10);
+    finished_pub_ = nh.advertise<scan_planner::PlanFinished>("/planning/finished", 10);
     data_disp_pub_ = nh.advertise<scan_planner::DataDisp>("/planning/data_display", 100);
     self_inflation_pub_ = nh.advertise<visualization_msgs::Marker>("self_inflation", 10, true);
 
@@ -663,6 +664,7 @@ namespace scan_planner
           ROS_INFO("[navi_mode=%d] Target already reached.", navi_mode_);
           replan_fail_count_ = 0;
           have_target_ = false;
+          publishFinished(scan_planner::PlanFinished::REACHED);
           changeFSMExecState(WAIT_TARGET, "FSM");
         }
       }
@@ -740,6 +742,7 @@ namespace scan_planner
 
         have_target_ = false;
 
+        publishFinished(scan_planner::PlanFinished::REACHED);
         changeFSMExecState(WAIT_TARGET, "FSM");
         return;
       }
@@ -777,6 +780,7 @@ namespace scan_planner
           need_hover_stop_ = false;
           have_target_ = false;
           trigger_ = false;
+          publishFinished(scan_planner::PlanFinished::EMERGENCY_STOP);
           changeFSMExecState(WAIT_TARGET, "EMERGENCY_EXIT");
         }
       }
@@ -820,6 +824,16 @@ namespace scan_planner
       start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
 
       auto result = callReboundReplan(false, false);
+      if (result == SCANPlannerManager::ReplanResult::TOO_CLOSE_TO_GOAL)
+      {
+        // start_pt_ is fixed for all three attempts below, and reboundReplan()
+        // checks distance-to-goal before flag_polyInit/flag_randomPolyTraj have
+        // any effect (planner_manager.cpp), so retrying would just repeat this
+        // same result -- return now so the FSM can finish via EXEC_TRAJ instead
+        // of burning through replan_fail_count_ into EMERGENCY_STOP.
+        ROS_INFO("[navi_mode=%d] Target already reached, no need to replan.", navi_mode_);
+        return true;
+      }
       if (result != SCANPlannerManager::ReplanResult::SUCCESS)
       {
         result = callReboundReplan(true, false);
@@ -998,6 +1012,15 @@ namespace scan_planner
     }
 
     return plan_result;
+  }
+
+  void SCANReplanFSM::publishFinished(uint8_t status)
+  {
+    scan_planner::PlanFinished msg;
+    msg.header.stamp = ros::Time::now();
+    msg.status = status;
+    msg.navi_mode = navi_mode_;
+    finished_pub_.publish(msg);
   }
 
   bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)

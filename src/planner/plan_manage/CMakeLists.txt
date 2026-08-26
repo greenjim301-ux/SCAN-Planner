@@ -29,6 +29,7 @@ add_message_files(
   FILES
   Bspline.msg
   DataDisp.msg
+  PlanFinished.msg
   )
   
 # Generate added messages and services with any dependencies listed here

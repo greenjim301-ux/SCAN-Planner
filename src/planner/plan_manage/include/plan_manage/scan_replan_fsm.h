@@ -18,6 +18,7 @@
 #include <plan_env/grid_map.h>
 #include <scan_planner/Bspline.h>
 #include <scan_planner/DataDisp.h>
+#include <scan_planner/PlanFinished.h>
 #include <plan_manage/planner_manager.h>
 #include <traj_utils/planning_visualization.h>
 
@@ -92,7 +93,7 @@ namespace scan_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber goal_sub_, odom_sub_, path_sub_, waypoints_sub_, go2_execution_frozen_sub_, user_emergency_stop_sub_;
-    ros::Publisher replan_pub_, new_pub_, bspline_pub_, data_disp_pub_, self_inflation_pub_, stop_pub_;
+    ros::Publisher replan_pub_, new_pub_, bspline_pub_, data_disp_pub_, self_inflation_pub_, stop_pub_, finished_pub_;
 
     /* helper functions */
     SCANPlannerManager::ReplanResult callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
@@ -112,6 +113,8 @@ namespace scan_planner
     bool adjustGlobalTargetIfOccupied();
     void getLocalTarget();
     void finishProcess();
+    void publishFinished(uint8_t status); // fires once per mission end, on /planning/finished -- lets whatever
+                                           // dispatched the target (e.g. deep_bridge) know it's done without polling
     void publishSelfInflationMarker();
     double getOdomYaw() const;
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
