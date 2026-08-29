@@ -146,7 +146,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   occ_timer_ = node_.createTimer(ros::Duration(0.05), &GridMap::updateOccupancyCallback, this);
   // change to 10hz for now
-  vis_timer_ = node_.createTimer(ros::Duration(0.1), &GridMap::visCallback, this);
+  vis_timer_ = node_.createTimer(ros::Duration(0.2), &GridMap::visCallback, this);
 
   map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupancy", 10);
   map_inf_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupancy_inflate", 10);
