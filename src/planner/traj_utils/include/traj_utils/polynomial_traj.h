@@ -75,9 +75,12 @@ public:
 
   Eigen::Vector3d evaluate(double t)
   {
-    /* detetrmine segment num */
+    /* determine segment num -- clamp to the last segment instead of walking
+       idx past times.size() when t overruns the trajectory's own duration
+       (e.g. receding-horizon time_increase_ drift); t is left as the
+       overshoot into that last segment rather than crashing/reading garbage */
     int idx = 0;
-    while (times[idx] + 1e-4 < t)
+    while (idx + 1 < (int)times.size() && times[idx] + 1e-4 < t)
     {
       t -= times[idx];
       ++idx;
@@ -99,9 +102,12 @@ public:
 
   Eigen::Vector3d evaluateVel(double t)
   {
-    /* detetrmine segment num */
+    /* determine segment num -- clamp to the last segment instead of walking
+       idx past times.size() when t overruns the trajectory's own duration
+       (e.g. receding-horizon time_increase_ drift); t is left as the
+       overshoot into that last segment rather than crashing/reading garbage */
     int idx = 0;
-    while (times[idx] + 1e-4 < t)
+    while (idx + 1 < (int)times.size() && times[idx] + 1e-4 < t)
     {
       t -= times[idx];
       ++idx;
@@ -130,9 +136,12 @@ public:
 
   Eigen::Vector3d evaluateAcc(double t)
   {
-    /* detetrmine segment num */
+    /* determine segment num -- clamp to the last segment instead of walking
+       idx past times.size() when t overruns the trajectory's own duration
+       (e.g. receding-horizon time_increase_ drift); t is left as the
+       overshoot into that last segment rather than crashing/reading garbage */
     int idx = 0;
-    while (times[idx] + 1e-4 < t)
+    while (idx + 1 < (int)times.size() && times[idx] + 1e-4 < t)
     {
       t -= times[idx];
       ++idx;
