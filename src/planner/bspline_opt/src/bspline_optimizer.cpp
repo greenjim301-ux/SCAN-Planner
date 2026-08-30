@@ -1019,7 +1019,7 @@ namespace scan_planner
                    << cps_.points.col(3).transpose() << "\n"
                    << cps_.points.col(4).transpose() << endl;
               ROS_WARN("First 3 control points in obstacles! return false, t=%f", t);
-              //return false;
+              return false;
             }
 
             break;
