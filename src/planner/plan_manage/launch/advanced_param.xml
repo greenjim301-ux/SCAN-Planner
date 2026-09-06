@@ -14,7 +14,7 @@
 
   <!-- public parameters -->
   <arg name="max_vel" default="0.75"/>
-  <arg name="max_acc" default="0.5"/>
+  <arg name="max_acc" default="2.0"/>
   <arg name="planning_horizon" default="5.0"/>
 
   <!-- main node -->
@@ -50,11 +50,11 @@
     <param name="grid_map/sliding_map_size_y" value="10.0" />
     <param name="grid_map/sliding_map_size_z" value="5.0" />
     <param name="grid_map/map_sliding_thresh" value="0.2"/>
-    <param name="grid_map/double_cylinder_radius" value="0.25" />
-    <param name="grid_map/double_cylinder_offset" value="0.18" />
+    <param name="grid_map/double_cylinder_radius" value="0.20" />
+    <param name="grid_map/double_cylinder_offset" value="0.10" />
     <param name="grid_map/obstacles_inflation_z_up" value="0.1" />
     <param name="grid_map/obstacles_inflation_z_down" value="0.1" />
-    <param name="grid_map/body_height" value="0.4" />
+    <param name="grid_map/body_height" value="0.0" />
 
     <!-- depth camera intrinsics -->
     <param name="grid_map/cx" value="$(arg cx)"/>
