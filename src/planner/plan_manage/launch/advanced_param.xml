@@ -42,6 +42,7 @@
     <param name="fsm/emergency_time_" value="1.0" type="double"/>
     <param name="fsm/fail_safe" value="true" type="bool"/> 
     <param name="fsm/max_replan_fail_count" value="1000" type="int"/>
+    <param name="fsm/waypoint_skip_fail_count" value="100" type="int"/>
     <param name="fsm/is_real_world" value="$(arg is_real_world)" type="bool"/>
 
     <!-- sliding map -->
