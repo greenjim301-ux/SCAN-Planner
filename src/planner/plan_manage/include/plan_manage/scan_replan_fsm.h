@@ -76,6 +76,12 @@ namespace scan_planner
     int continuously_called_times_{0};
     int replan_fail_count_{0};
     int max_replan_fail_count_{1000};
+    // In PRESET_TARGET mode, give up on the current waypoint and advance to the
+    // next one after this many consecutive replan failures, instead of retrying
+    // it all the way up to max_replan_fail_count_ (which drops the whole mission).
+    // Must stay well below max_replan_fail_count_, which remains the final
+    // safety net for when there's no next waypoint left to fall back to.
+    int waypoint_skip_fail_count_{50};
     ros::Time last_freeze_update_time_;
 
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state

@@ -28,6 +28,7 @@ namespace scan_planner
     nh.param("fsm/emergency_time_", emergency_time_, 1.0);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/max_replan_fail_count", max_replan_fail_count_, 1000);
+    nh.param("fsm/waypoint_skip_fail_count", waypoint_skip_fail_count_, 50);
     // Must stay comfortably above reboundReplan()'s hard "too close to goal" rejection
     // radius (0.2 m, see planner_manager.cpp) so odom jitter between this check and the
     // actual replan call never lands back inside the rejection zone.
@@ -798,6 +799,21 @@ namespace scan_planner
 
   void SCANReplanFSM::finishProcess()
   {
+    // Give up on the current waypoint before hitting the full mission-abort
+    // threshold below, as long as there's a next waypoint to fall back to.
+    if (isWaypointSequenceMode() && replan_fail_count_ >= waypoint_skip_fail_count_ &&
+        current_wp_ + 1 < (int)active_waypoints_.size())
+    {
+      ROS_WARN("[navi_mode=%d] Replan failed %d times on waypoint %d/%zu, skipping to the next one.",
+                navi_mode_, replan_fail_count_, current_wp_ + 1, active_waypoints_.size());
+      current_wp_++;
+      replan_fail_count_ = 0;
+      if (!planNextWaypoint())
+        replan_fail_count_++;
+      changeFSMExecState(GEN_NEW_TRAJ, "finishProcess");
+      return;
+    }
+
     if (replan_fail_count_ >= max_replan_fail_count_)
     {
       ROS_WARN("Replan failed %d times. Emergency stop and wait for a new target.", replan_fail_count_);
