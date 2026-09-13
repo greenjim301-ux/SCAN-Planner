@@ -278,10 +278,13 @@ namespace scan_planner
     end_pt_ = active_waypoints_[current_wp_];
     setStartStateFromOdomOrCurrentTraj();
 
+    // Reference path only -- inheriting the live start_acc_ makes the single-segment
+    // quintic bulge metres off the straight line, and getLocalTarget() then picks its
+    // target off that bulge instead of off the way to the waypoint.
     bool success = planner_manager_->planGlobalTraj(
         start_pt_,
         start_vel_,
-        start_acc_,
+        Eigen::Vector3d::Zero(),
         end_pt_,
         Eigen::Vector3d::Zero(),
         Eigen::Vector3d::Zero());
@@ -875,10 +878,12 @@ namespace scan_planner
       start_acc_.setZero();
     }
 
+    // Zero start_acc for the same reason as planNextWaypoint(): this is a reference
+    // path, and the live acceleration bulges the single-segment quintic off course.
     if (!planner_manager_->planGlobalTraj(
             start_pt_,
             start_vel_,
-            start_acc_,
+            Eigen::Vector3d::Zero(),
             end_pt_,
             Eigen::Vector3d::Zero(),
             Eigen::Vector3d::Zero()))

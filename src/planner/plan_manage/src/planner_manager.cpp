@@ -391,8 +391,12 @@ namespace scan_planner
       time(i) = (pos.col(i + 1) - pos.col(i)).norm() / (pp_.max_vel_);
     }
 
+    // Ease in and out by stretching the first and last segment. With a single
+    // segment both indices name the same element, so guard against stretching
+    // it twice -- a 4x duration makes the quintic bulge metres off course.
     time(0) *= 2.0;
-    time(time.rows() - 1) *= 2.0;
+    if (time.rows() > 1)
+      time(time.rows() - 1) *= 2.0;
 
     PolynomialTraj gl_traj;
     if (pos.cols() >= 3)
@@ -455,8 +459,12 @@ namespace scan_planner
       time(i) = (pos.col(i + 1) - pos.col(i)).norm() / (pp_.max_vel_);
     }
 
+    // Ease in and out by stretching the first and last segment. With a single
+    // segment both indices name the same element, so guard against stretching
+    // it twice -- a 4x duration makes the quintic bulge metres off course.
     time(0) *= 2.0;
-    time(time.rows() - 1) *= 2.0;
+    if (time.rows() > 1)
+      time(time.rows() - 1) *= 2.0;
 
     PolynomialTraj gl_traj;
     if (pos.cols() >= 3)
