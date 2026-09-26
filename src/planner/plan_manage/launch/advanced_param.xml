@@ -115,9 +115,6 @@
   <param name="closed_loop_controller/finish_timeout" value="3.0" type="double"/>
   <!-- hold the traj clock while the reference is more than this far ahead along the traj [m]; 0 disables -->
   <param name="closed_loop_controller/max_lead" value="0.2" type="double"/>
-  <!-- feed-forward velocity taken this far ahead on the traj [s], to offset the robot's
-       ~0.6-0.75 s response delay (it overshot the goal by 0.45 m without it); 0 disables -->
-  <param name="closed_loop_controller/ff_lookahead" value="0.5" type="double"/>
   <!-- one CSV per tracking session (pose, desired pose, cmd_vel at 100 Hz); empty value disables -->
   <param name="closed_loop_controller/log_dir" value="$(optenv HOME /tmp)/scan_planner_track_logs" type="str"/>
 
