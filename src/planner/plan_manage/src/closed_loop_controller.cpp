@@ -38,6 +38,9 @@ double odom_yaw = 0.0;
 
 double exec_time = 0.0;
 ros::Time last_update_time;
+// When exec_time first reached traj_duration for the current traj; zero = not
+// yet. Starts the finish_timeout settle window.
+ros::Time traj_end_time;
 
 double time_forward;
 double heading_error_threshold;
@@ -47,6 +50,7 @@ double max_vx;
 double max_vy;
 double max_vyaw;
 double finish_dist;
+double finish_timeout;
 std::string body_pose_topic;
 
 bool loadRequiredParam(const ros::NodeHandle &nh, const std::string &name, double &value)
@@ -70,6 +74,7 @@ bool loadParams(const ros::NodeHandle &nh)
   ok &= loadRequiredParam(nh, "max_vy", max_vy);
   ok &= loadRequiredParam(nh, "max_vyaw", max_vyaw);
   ok &= loadRequiredParam(nh, "finish_dist", finish_dist);
+  ok &= loadRequiredParam(nh, "finish_timeout", finish_timeout);
   if (ok && max_vyaw > kMaxVYawLimit)
   {
     ROS_WARN("[closed_loop_controller] cap max_vyaw %.3f to %.3f rad/s.", max_vyaw, kMaxVYawLimit);
@@ -158,6 +163,7 @@ void bsplineCallback(const scan_planner::BsplineConstPtr &msg)
   traj_id = msg->traj_id;
   exec_time = 0.0;
   last_update_time = ros::Time::now();
+  traj_end_time = ros::Time();
   receive_traj = true;
 
   ROS_WARN("[closed_loop_controller] received bspline traj_id=%d duration=%.3f", traj_id, traj_duration);
@@ -170,6 +176,26 @@ void stopCallback(const std_msgs::EmptyConstPtr &)
   // path that cmdCallback already takes at startup / before the first bspline.
   receive_traj = false;
   ROS_WARN("[closed_loop_controller] received stop signal, halting trajectory tracking.");
+}
+
+// Ends tracking of the current traj for good: clears receive_traj so the
+// controller stays on publishStop() -- no re-engaging when the robot drifts
+// back out of finish_dist -- until the next bspline arrives.
+//
+// Needed because the FSM declares REACHED purely by the trajectory clock and
+// never sends planning/stop on a normal finish, while exec_time here can lag
+// that clock (it is frozen while turning in place). Without this, the
+// controller kept chasing the endpoint indefinitely after the task ended.
+void finishTracking(const Eigen::Vector2d &pos_err, bool timed_out)
+{
+  receive_traj = false;
+  publishExecutionFrozen(false);
+  publishStop();
+  if (timed_out)
+    ROS_WARN("[closed_loop_controller] traj_id=%d: still %.3f m from the end %.1f s after the traj ended, giving up.",
+             traj_id, pos_err.norm(), finish_timeout);
+  else
+    ROS_WARN("[closed_loop_controller] traj_id=%d finished, %.3f m from the end.", traj_id, pos_err.norm());
 }
 
 void odomCallback(const nav_msgs::OdometryConstPtr &msg)
@@ -198,6 +224,19 @@ void cmdCallback(const ros::TimerEvent &)
   const double t_eval = std::min(exec_time, traj_duration);
   Eigen::Vector3d pos_des = traj[0].evaluateDeBoorT(t_eval);
   Eigen::Vector3d vel_des = traj[1].evaluateDeBoorT(t_eval);
+
+  // Settle window after the traj ends. Checked before the heading branch so
+  // that turning in place at the end is bounded by it too.
+  if (exec_time >= traj_duration)
+  {
+    if (traj_end_time.isZero())
+      traj_end_time = now;
+    else if ((now - traj_end_time).toSec() > finish_timeout)
+    {
+      finishTracking(Eigen::Vector2d(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1)), true);
+      return;
+    }
+  }
 
   const double yaw_des = estimateDesiredYaw(t_eval, pos_des);
   const double yaw_err = normalizeAngle(yaw_des - odom_yaw);
@@ -230,7 +269,10 @@ void cmdCallback(const ros::TimerEvent &)
   cmd.angular.z = vyaw_cmd;
 
   if (exec_time >= traj_duration && pos_err.norm() < finish_dist)
-    cmd = geometry_msgs::Twist();
+  {
+    finishTracking(pos_err, false);
+    return;
+  }
 
   cmd_vel_pub.publish(cmd);
 }
