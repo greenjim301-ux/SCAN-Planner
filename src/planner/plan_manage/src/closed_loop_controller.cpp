@@ -1,5 +1,9 @@
 #include <algorithm>
 #include <cmath>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <string>
 
@@ -52,6 +56,9 @@ double max_vyaw;
 double finish_dist;
 double finish_timeout;
 std::string body_pose_topic;
+// Per-session tracking log (pose + cmd_vel every control tick); empty = off.
+std::string log_dir;
+std::ofstream log_file;
 
 bool loadRequiredParam(const ros::NodeHandle &nh, const std::string &name, double &value)
 {
@@ -75,6 +82,7 @@ bool loadParams(const ros::NodeHandle &nh)
   ok &= loadRequiredParam(nh, "max_vyaw", max_vyaw);
   ok &= loadRequiredParam(nh, "finish_dist", finish_dist);
   ok &= loadRequiredParam(nh, "finish_timeout", finish_timeout);
+  nh.param<std::string>("log_dir", log_dir, std::string(""));
   if (ok && max_vyaw > kMaxVYawLimit)
   {
     ROS_WARN("[closed_loop_controller] cap max_vyaw %.3f to %.3f rad/s.", max_vyaw, kMaxVYawLimit);
@@ -136,6 +144,59 @@ void publishExecutionFrozen(bool frozen)
   execution_frozen_pub.publish(msg);
 }
 
+// ---- tracking log ----
+// One CSV per tracking session: opened when a traj arrives while idle, closed
+// when tracking ends (finishTracking / planning/stop). Replans during a session
+// append to the same file; the traj_id column tells them apart.
+void openLog()
+{
+  if (log_dir.empty() || log_file.is_open())
+    return;
+
+  std::error_code ec;
+  std::filesystem::create_directories(log_dir, ec);
+  char stamp[32];
+  const std::time_t t = std::time(nullptr);
+  std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&t));
+  // traj_id in the name: a new session can start within the same second the
+  // previous one ended (next waypoint), and must not truncate its file.
+  const std::string path = log_dir + "/track_" + stamp + "_traj" + std::to_string(traj_id) + ".csv";
+
+  log_file.open(path);
+  if (!log_file)
+  {
+    ROS_WARN("[closed_loop_controller] cannot open tracking log %s", path.c_str());
+    return;
+  }
+  log_file << std::fixed << std::setprecision(4)
+           << "t,traj_id,exec_time,traj_duration,x,y,z,yaw,x_des,y_des,z_des,yaw_des,frozen,vx,vy,vyaw\n";
+  ROS_WARN("[closed_loop_controller] tracking log: %s", path.c_str());
+}
+
+void closeLog()
+{
+  if (log_file.is_open())
+    log_file.close();
+}
+
+// cmd is exactly what was published on cmd_vel this tick.
+void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des, bool frozen,
+            const geometry_msgs::Twist &cmd)
+{
+  if (!log_file.is_open())
+    return;
+  log_file << now.toSec() << ',' << traj_id << ',' << exec_time << ',' << traj_duration << ','
+           << odom_pos(0) << ',' << odom_pos(1) << ',' << odom_pos(2) << ',' << odom_yaw << ','
+           << pos_des(0) << ',' << pos_des(1) << ',' << pos_des(2) << ',' << yaw_des << ','
+           << (frozen ? 1 : 0) << ',' << cmd.linear.x << ',' << cmd.linear.y << ',' << cmd.angular.z << '\n';
+  // Flush about once a second: the node aborts on shutdown (global ros handles
+  // outliving roscpp), which would drop whatever is still buffered if the
+  // planner is stopped mid-session.
+  static unsigned rows = 0;
+  if (++rows % 100 == 0)
+    log_file.flush();
+}
+
 void bsplineCallback(const scan_planner::BsplineConstPtr &msg)
 {
   Eigen::MatrixXd pos_pts(3, msg->pos_pts.size());
@@ -164,6 +225,8 @@ void bsplineCallback(const scan_planner::BsplineConstPtr &msg)
   exec_time = 0.0;
   last_update_time = ros::Time::now();
   traj_end_time = ros::Time();
+  if (!receive_traj)
+    openLog();
   receive_traj = true;
 
   ROS_WARN("[closed_loop_controller] received bspline traj_id=%d duration=%.3f", traj_id, traj_duration);
@@ -175,6 +238,7 @@ void stopCallback(const std_msgs::EmptyConstPtr &)
   // adding a second flag) reuses the exact same "no traj -> publishStop()"
   // path that cmdCallback already takes at startup / before the first bspline.
   receive_traj = false;
+  closeLog();
   ROS_WARN("[closed_loop_controller] received stop signal, halting trajectory tracking.");
 }
 
@@ -191,6 +255,7 @@ void finishTracking(const Eigen::Vector2d &pos_err, bool timed_out)
   receive_traj = false;
   publishExecutionFrozen(false);
   publishStop();
+  closeLog();
   if (timed_out)
     ROS_WARN("[closed_loop_controller] traj_id=%d: still %.3f m from the end %.1f s after the traj ended, giving up.",
              traj_id, pos_err.norm(), finish_timeout);
@@ -233,6 +298,7 @@ void cmdCallback(const ros::TimerEvent &)
       traj_end_time = now;
     else if ((now - traj_end_time).toSec() > finish_timeout)
     {
+      logRow(now, pos_des, std::numeric_limits<double>::quiet_NaN(), false, geometry_msgs::Twist());
       finishTracking(Eigen::Vector2d(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1)), true);
       return;
     }
@@ -246,6 +312,9 @@ void cmdCallback(const ros::TimerEvent &)
   {
     publishExecutionFrozen(true);
     publishStop(vyaw_cmd);
+    geometry_msgs::Twist turn_cmd;
+    turn_cmd.angular.z = vyaw_cmd; // same as publishStop(vyaw_cmd): vyaw_cmd is already clamped
+    logRow(now, pos_des, yaw_des, true, turn_cmd);
     last_update_time = now; // freeze exec_time while rotating in place
     return;
   }
@@ -270,11 +339,13 @@ void cmdCallback(const ros::TimerEvent &)
 
   if (exec_time >= traj_duration && pos_err.norm() < finish_dist)
   {
+    logRow(now, pos_des, yaw_des, false, geometry_msgs::Twist());
     finishTracking(pos_err, false);
     return;
   }
 
   cmd_vel_pub.publish(cmd);
+  logRow(now, pos_des, yaw_des, false, cmd);
 }
 } // namespace
 

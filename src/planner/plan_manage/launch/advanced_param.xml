@@ -111,5 +111,7 @@
   <param name="closed_loop_controller/finish_dist" value="0.15" type="double"/>
   <!-- max time [s] to keep chasing the endpoint after the traj ends; stops (with a WARN) even if not within finish_dist -->
   <param name="closed_loop_controller/finish_timeout" value="3.0" type="double"/>
+  <!-- one CSV per tracking session (pose, desired pose, cmd_vel at 100 Hz); empty value disables -->
+  <param name="closed_loop_controller/log_dir" value="$(optenv HOME /tmp)/scan_planner_track_logs" type="str"/>
 
 </launch>
