@@ -103,18 +103,14 @@
   <!-- trajectory tracking -->
   <param name="closed_loop_controller/time_forward" value="0.8" type="double"/>
   <param name="closed_loop_controller/heading_error_threshold" value="0.8" type="double"/>
-  <!-- gains halved from 0.8 / 1.5: the robot responds ~0.5-0.7 s late and the pose
-       updates at ~7 Hz, so the higher gains kept over-correcting (0.34 m swings) -->
-  <param name="closed_loop_controller/kp_pos" value="0.4" type="double"/>
-  <param name="closed_loop_controller/kp_yaw" value="0.8" type="double"/>
+  <param name="closed_loop_controller/kp_pos" value="0.8" type="double"/>
+  <param name="closed_loop_controller/kp_yaw" value="1.5" type="double"/>
   <param name="closed_loop_controller/max_vx" value="$(arg max_vel)" type="double"/>
   <param name="closed_loop_controller/max_vy" value="0.35" type="double"/>
   <param name="closed_loop_controller/max_vyaw" value="1.0" type="double"/>
   <param name="closed_loop_controller/finish_dist" value="0.15" type="double"/>
   <!-- max time [s] to keep chasing the endpoint after the traj ends; stops (with a WARN) even if not within finish_dist -->
   <param name="closed_loop_controller/finish_timeout" value="3.0" type="double"/>
-  <!-- hold the traj clock while the reference is more than this far ahead along the traj [m]; 0 disables -->
-  <param name="closed_loop_controller/max_lead" value="0.2" type="double"/>
   <!-- one CSV per tracking session (pose, desired pose, cmd_vel at 100 Hz); empty value disables -->
   <param name="closed_loop_controller/log_dir" value="$(optenv HOME /tmp)/scan_planner_track_logs" type="str"/>
 

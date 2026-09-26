@@ -55,7 +55,6 @@ double max_vy;
 double max_vyaw;
 double finish_dist;
 double finish_timeout;
-double max_lead;
 std::string body_pose_topic;
 // Per-session tracking log (pose + cmd_vel every control tick); empty = off.
 std::string log_dir;
@@ -83,7 +82,6 @@ bool loadParams(const ros::NodeHandle &nh)
   ok &= loadRequiredParam(nh, "max_vyaw", max_vyaw);
   ok &= loadRequiredParam(nh, "finish_dist", finish_dist);
   ok &= loadRequiredParam(nh, "finish_timeout", finish_timeout);
-  ok &= loadRequiredParam(nh, "max_lead", max_lead);
   nh.param<std::string>("log_dir", log_dir, std::string(""));
   if (ok && max_vyaw > kMaxVYawLimit)
   {
@@ -170,8 +168,6 @@ void openLog()
     ROS_WARN("[closed_loop_controller] cannot open tracking log %s", path.c_str());
     return;
   }
-  // frozen: 0 = clock running, 1 = turning in place, 2 = waiting for the robot
-  // to catch up (max_lead)
   log_file << std::fixed << std::setprecision(4)
            << "t,traj_id,exec_time,traj_duration,x,y,z,yaw,x_des,y_des,z_des,yaw_des,frozen,vx,vy,vyaw\n";
   ROS_WARN("[closed_loop_controller] tracking log: %s", path.c_str());
@@ -184,7 +180,7 @@ void closeLog()
 }
 
 // cmd is exactly what was published on cmd_vel this tick.
-void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des, int frozen,
+void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des, bool frozen,
             const geometry_msgs::Twist &cmd)
 {
   if (!log_file.is_open())
@@ -192,7 +188,7 @@ void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des
   log_file << now.toSec() << ',' << traj_id << ',' << exec_time << ',' << traj_duration << ','
            << odom_pos(0) << ',' << odom_pos(1) << ',' << odom_pos(2) << ',' << odom_yaw << ','
            << pos_des(0) << ',' << pos_des(1) << ',' << pos_des(2) << ',' << yaw_des << ','
-           << frozen << ',' << cmd.linear.x << ',' << cmd.linear.y << ',' << cmd.angular.z << '\n';
+           << (frozen ? 1 : 0) << ',' << cmd.linear.x << ',' << cmd.linear.y << ',' << cmd.angular.z << '\n';
   // Flush about once a second: the node aborts on shutdown (global ros handles
   // outliving roscpp), which would drop whatever is still buffered if the
   // planner is stopped mid-session.
@@ -302,7 +298,7 @@ void cmdCallback(const ros::TimerEvent &)
       traj_end_time = now;
     else if ((now - traj_end_time).toSec() > finish_timeout)
     {
-      logRow(now, pos_des, std::numeric_limits<double>::quiet_NaN(), 0, geometry_msgs::Twist());
+      logRow(now, pos_des, std::numeric_limits<double>::quiet_NaN(), false, geometry_msgs::Twist());
       finishTracking(Eigen::Vector2d(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1)), true);
       return;
     }
@@ -318,27 +314,13 @@ void cmdCallback(const ros::TimerEvent &)
     publishStop(vyaw_cmd);
     geometry_msgs::Twist turn_cmd;
     turn_cmd.angular.z = vyaw_cmd; // same as publishStop(vyaw_cmd): vyaw_cmd is already clamped
-    logRow(now, pos_des, yaw_des, 1, turn_cmd);
+    logRow(now, pos_des, yaw_des, true, turn_cmd);
     last_update_time = now; // freeze exec_time while rotating in place
     return;
   }
 
-  // Hold the trajectory clock while the reference is already max_lead ahead of
-  // the robot along the traj. The robot starts moving ~0.7 s after the first
-  // command and lags by about as much throughout; with the clock running
-  // freely the reference got 0.5 m ahead at the start and the P term then
-  // over-corrected. Only the along-track part counts, so a sideways error
-  // does not stop the clock. The command stays non-zero while held (P term
-  // on a >= max_lead error), so this cannot stall. Reported to the FSM as
-  // frozen, same as turning in place, so its traj clock is held too.
-  const Eigen::Vector2d lead_vec(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1));
-  const Eigen::Vector2d tangent(vel_des(0), vel_des(1));
-  const double lead = tangent.norm() > 0.05 ? lead_vec.dot(tangent.normalized()) : lead_vec.norm();
-  const bool waiting = max_lead > 0.0 && lead > max_lead;
-
-  publishExecutionFrozen(waiting);
-  if (!waiting)
-    exec_time = std::min(traj_duration, exec_time + dt);
+  publishExecutionFrozen(false);
+  exec_time = std::min(traj_duration, exec_time + dt);
   last_update_time = now;
 
   pos_des = traj[0].evaluateDeBoorT(exec_time);
@@ -357,13 +339,13 @@ void cmdCallback(const ros::TimerEvent &)
 
   if (exec_time >= traj_duration && pos_err.norm() < finish_dist)
   {
-    logRow(now, pos_des, yaw_des, 0, geometry_msgs::Twist());
+    logRow(now, pos_des, yaw_des, false, geometry_msgs::Twist());
     finishTracking(pos_err, false);
     return;
   }
 
   cmd_vel_pub.publish(cmd);
-  logRow(now, pos_des, yaw_des, waiting ? 2 : 0, cmd);
+  logRow(now, pos_des, yaw_des, false, cmd);
 }
 } // namespace
 
