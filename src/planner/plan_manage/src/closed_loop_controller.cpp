@@ -56,6 +56,7 @@ double max_vyaw;
 double finish_dist;
 double finish_timeout;
 double max_lead;
+double ff_lookahead;
 std::string body_pose_topic;
 // Per-session tracking log (pose + cmd_vel every control tick); empty = off.
 std::string log_dir;
@@ -84,6 +85,7 @@ bool loadParams(const ros::NodeHandle &nh)
   ok &= loadRequiredParam(nh, "finish_dist", finish_dist);
   ok &= loadRequiredParam(nh, "finish_timeout", finish_timeout);
   ok &= loadRequiredParam(nh, "max_lead", max_lead);
+  ok &= loadRequiredParam(nh, "ff_lookahead", ff_lookahead);
   nh.param<std::string>("log_dir", log_dir, std::string(""));
   if (ok && max_vyaw > kMaxVYawLimit)
   {
@@ -331,10 +333,16 @@ void cmdCallback(const ros::TimerEvent &)
   // does not stop the clock. The command stays non-zero while held (P term
   // on a >= max_lead error), so this cannot stall. Reported to the FSM as
   // frozen, same as turning in place, so its traj clock is held too.
+  //
+  // Only while the reference is actually moving: near a standstill (end of the
+  // traj) "along-track" has no direction, and falling back to the plain
+  // distance held the clock for 4.5 s once the robot had overshot the end --
+  // the robot was ahead, not behind -- which also kept finish_timeout from
+  // ever starting.
   const Eigen::Vector2d lead_vec(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1));
   const Eigen::Vector2d tangent(vel_des(0), vel_des(1));
-  const double lead = tangent.norm() > 0.05 ? lead_vec.dot(tangent.normalized()) : lead_vec.norm();
-  const bool waiting = max_lead > 0.0 && lead > max_lead;
+  const bool waiting = max_lead > 0.0 && tangent.norm() > 0.05 &&
+                       lead_vec.dot(tangent.normalized()) > max_lead;
 
   publishExecutionFrozen(waiting);
   if (!waiting)
@@ -342,7 +350,11 @@ void cmdCallback(const ros::TimerEvent &)
   last_update_time = now;
 
   pos_des = traj[0].evaluateDeBoorT(exec_time);
-  vel_des = traj[1].evaluateDeBoorT(exec_time);
+  // Feed-forward taken ff_lookahead ahead on the traj: the robot acts on a
+  // command ~0.6-0.75 s late, so feeding the current traj velocity made it
+  // start braking late and overshoot the goal by 0.45 m. The position
+  // reference (P term) stays at exec_time.
+  vel_des = traj[1].evaluateDeBoorT(std::min(traj_duration, exec_time + ff_lookahead));
 
   Eigen::Vector2d pos_err(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1));
   Eigen::Vector2d vel_ff(vel_des(0), vel_des(1));
