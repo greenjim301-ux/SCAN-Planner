@@ -39,6 +39,16 @@ int traj_id = 0;
 
 Eigen::Vector3d odom_pos = Eigen::Vector3d::Zero();
 double odom_yaw = 0.0;
+// Diagnostics only (no effect on control):
+//   odom_cov_          localization quality, straight from /hand_lio/odom_vehicle
+//   odom_msg_stamp_    stamp of the last odometry message
+//   odom_change_stamp_ stamp of the last message whose pose VALUE differed
+// The last two are different failure modes and the log must tell them apart:
+// a stream that is LATE (localization backlog / stale stream) vs a stream that
+// is on time but repeats the same pose (staircase content). Only the pair does.
+double odom_cov_ = std::numeric_limits<double>::quiet_NaN();
+ros::Time odom_msg_stamp_;
+ros::Time odom_change_stamp_;
 
 double exec_time = 0.0;
 ros::Time last_update_time;
@@ -169,7 +179,8 @@ void openLog()
     return;
   }
   log_file << std::fixed << std::setprecision(4)
-           << "t,traj_id,exec_time,traj_duration,x,y,z,yaw,x_des,y_des,z_des,yaw_des,frozen,vx,vy,vyaw\n";
+           << "t,traj_id,exec_time,traj_duration,x,y,z,yaw,x_des,y_des,z_des,yaw_des,frozen,vx,vy,vyaw"
+           << ",cov,odom_stamp,odom_age,ff_x,ff_y\n";
   ROS_WARN("[closed_loop_controller] tracking log: %s", path.c_str());
 }
 
@@ -185,10 +196,23 @@ void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des
 {
   if (!log_file.is_open())
     return;
+  // odom_age = how old the pose VALUE is (seconds since it last changed), NOT
+  // since the last message: that is the quantity the controller actually acts
+  // on. -1 = no pose received yet. ff_* = the feed-forward part of the command
+  // (traj tangent at exec_time); the P-term part is kp_pos * (pos_des - odom_pos).
+  const double odom_age = odom_change_stamp_.isZero() ? -1.0 : (now - odom_change_stamp_).toSec();
+  Eigen::Vector2d ff(0.0, 0.0);
+  if (traj.size() > 1 && traj_duration > 0.0)
+  {
+    const Eigen::Vector3d vel = traj[1].evaluateDeBoorT(std::min(exec_time, traj_duration));
+    ff = Eigen::Vector2d(vel(0), vel(1));
+  }
   log_file << now.toSec() << ',' << traj_id << ',' << exec_time << ',' << traj_duration << ','
            << odom_pos(0) << ',' << odom_pos(1) << ',' << odom_pos(2) << ',' << odom_yaw << ','
            << pos_des(0) << ',' << pos_des(1) << ',' << pos_des(2) << ',' << yaw_des << ','
-           << (frozen ? 1 : 0) << ',' << cmd.linear.x << ',' << cmd.linear.y << ',' << cmd.angular.z << '\n';
+           << (frozen ? 1 : 0) << ',' << cmd.linear.x << ',' << cmd.linear.y << ',' << cmd.angular.z << ','
+           << odom_cov_ << ',' << odom_msg_stamp_.toSec() << ',' << odom_age << ',' << ff(0) << ',' << ff(1)
+           << '\n';
   // Flush about once a second: the node aborts on shutdown (global ros handles
   // outliving roscpp), which would drop whatever is still buffered if the
   // planner is stopped mid-session.
@@ -265,10 +289,16 @@ void finishTracking(const Eigen::Vector2d &pos_err, bool timed_out)
 
 void odomCallback(const nav_msgs::OdometryConstPtr &msg)
 {
-  odom_pos(0) = msg->pose.pose.position.x;
-  odom_pos(1) = msg->pose.pose.position.y;
-  odom_pos(2) = msg->pose.pose.position.z;
-  odom_yaw = tf::getYaw(msg->pose.pose.orientation);
+  const Eigen::Vector3d p(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+  const double yaw = tf::getYaw(msg->pose.pose.orientation);
+  // A repeated value is not a new pose: grodom republishes the same pose at
+  // 200 Hz, so only an actual VALUE change may reset odom_age.
+  if (!have_odom || (p - odom_pos).norm() > 1e-6 || std::abs(normalizeAngle(yaw - odom_yaw)) > 1e-6)
+    odom_change_stamp_ = msg->header.stamp;
+  odom_pos = p;
+  odom_yaw = yaw;
+  odom_cov_ = msg->pose.covariance[0];
+  odom_msg_stamp_ = msg->header.stamp;
   have_odom = true;
 }
 
