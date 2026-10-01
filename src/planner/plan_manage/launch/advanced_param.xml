@@ -131,4 +131,24 @@
   <param name="closed_loop_controller/odom_jump_max_residual" value="0.20" type="double"/>
   <param name="closed_loop_controller/odom_jump_window" value="0.30" type="double"/>
 
+  <!-- 原地转 (heading error 超阈值) 时的偏航限幅 —— 只买需要时改这一个参数
+
+       控制器在 |yaw_err| > heading_error_threshold 时会进入"原地转"支路
+       (closed_loop_controller.cpp 里 publishStop 那一段): 纵向指令清零, 只发角速度。
+       本参数把这条支路的角速度单独夹住, 默认 = max_vyaw (不改行为)。
+
+       **为什么要单独一个参数**: 这条支路原先直接发 vyaw_cmd, 想压低转速只能改代码;
+       而 2026-10-01 在板子上只改了那个只用于写日志的 turn_cmd, 结果机器人照旧收 0.5、
+       CSV 里却写着 0.2, 日志反而不可信。现在下发的值与写日志的值同源。
+
+       **买之前先知道代价** (实测数据):
+         * kp_yaw=1.5 时, 顶格门槛 = turn_vyaw_max/1.5。填 0.2 -> |yaw_err|>7.6° 就顶格
+           (原来 0.5 对应 19°), 原地转时长大约翻倍。
+         * 原地转越久 -> "纵向指令为 0" 的窗口越长 -> 斜面上后溜越多。实测所有后溜
+           事件 (0.2~0.4 m) 都落在 frozen 窗口里。
+         * 提 max_vyaw / 降这个值对"大幅左右摆"都没有帮助: 那些摆动是位姿流不连续
+           (5~19 次/s、5~30 cm) 造成的, 不是航向回路在过摆 (跨轮相关性也不支持)。
+       验证方式: 同一条路线每档跑 2~3 遍 —— 定位质量逐轮差 5 倍, 单次对照没有意义。 -->
+  <param name="closed_loop_controller/turn_vyaw_max" value="0.2" type="double"/>
+
 </launch>

@@ -104,6 +104,14 @@ double kp_yaw;
 double max_vx;
 double max_vy;
 double max_vyaw;
+// 原地转 (|yaw_err| > heading_error_threshold, 走 publishStop 那条支路) 时的偏航限幅。
+// 默认等于 max_vyaw 即不改变行为; 单独给一个参数是为了让"把原地转的转速压低"只改
+// 参数、不改代码。**关键**: 下发给机器人的值与 CSV 里记的值必须同源 —— 之前出现过
+// 只改了 turn_cmd (那个 Twist 只喂 logRow) 而 publishStop 仍用 max_vyaw 夹过值的情况,
+// 结果机器人照旧转 0.5 rad/s、日志里却写着 0.2, 日志反而不可信。
+// 代价 (实测): 该值越小 -> |yaw_err| > turn_vyaw_max/kp_yaw 就顶格 -> 原地转越久 ->
+// "纵向指令为 0" 的窗口越长 -> 斜面上后溜越多 (所有后溜事件都落在 frozen 窗口里)。
+double turn_vyaw_max;
 double finish_dist;
 double finish_timeout;
 std::string body_pose_topic;
@@ -153,6 +161,25 @@ bool loadParams(const ros::NodeHandle &nh)
   {
     ROS_WARN("[closed_loop_controller] cap max_vyaw %.3f to %.3f rad/s.", max_vyaw, kMaxVYawLimit);
     max_vyaw = kMaxVYawLimit;
+  }
+  // 原地转的偏航限幅: 缺省 = max_vyaw (不改变行为)。必须放在 max_vyaw 夹过之后取默认值。
+  nh.param("turn_vyaw_max", turn_vyaw_max, max_vyaw);
+  if (ok && turn_vyaw_max <= 0.0)
+  {
+    ROS_ERROR("[closed_loop_controller] turn_vyaw_max=%.3f must be > 0", turn_vyaw_max);
+    ok = false;
+  }
+  else if (ok && turn_vyaw_max > max_vyaw)
+  {
+    ROS_WARN("[closed_loop_controller] turn_vyaw_max=%.3f > max_vyaw=%.3f, has no effect",
+             turn_vyaw_max, max_vyaw);
+  }
+  else if (ok)
+  {
+    ROS_WARN("[closed_loop_controller] heading-error turn yaw capped at %.2f rad/s (kp_yaw=%.2f -> "
+             "saturates above %.1f deg; max_vyaw=%.2f). Longer turns = longer frozen (vx=0) windows, "
+             "which is where the backward slip happens on slopes.",
+             turn_vyaw_max, kp_yaw, (turn_vyaw_max / kp_yaw) * 180.0 / M_PI, max_vyaw);
   }
   return ok;
 }
@@ -451,10 +478,15 @@ void cmdCallback(const ros::TimerEvent &)
 
   if (std::abs(yaw_err) > heading_error_threshold)
   {
+    // 原地转时的偏航限幅: 单独夹一次 (默认 turn_vyaw_max == max_vyaw, 即等价于原来),
+    // 并且**下发的值与写日志的值必须是同一个** —— turn_cmd 只喂给 logRow, 一旦两者
+    // 不同源, CSV 就会记下一个没发出去的值 (2026-10-01 12:10 在板子上踩过这个坑:
+    // 只改了 turn_cmd=0.2, 机器人实际仍收到 0.5, 而日志写 0.2)。
+    const double vyaw_turn = clamp(vyaw_cmd, -turn_vyaw_max, turn_vyaw_max);
     publishExecutionFrozen(true);
-    publishStop(vyaw_cmd);
+    publishStop(vyaw_turn);
     geometry_msgs::Twist turn_cmd;
-    turn_cmd.angular.z = vyaw_cmd; // same as publishStop(vyaw_cmd): vyaw_cmd is already clamped
+    turn_cmd.angular.z = vyaw_turn; // same as publishStop(vyaw_turn)
     logRow(now, pos_des, yaw_des, true, turn_cmd);
     last_update_time = now; // freeze exec_time while rotating in place
     return;
