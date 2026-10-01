@@ -114,4 +114,21 @@
   <!-- one CSV per tracking session (pose, desired pose, cmd_vel at 100 Hz); empty value disables -->
   <param name="closed_loop_controller/log_dir" value="$(optenv HOME /tmp)/scan_planner_track_logs" type="str"/>
 
+  <!-- 位姿不连续性诊断 (只记录, 不影响控制) —— 依据见 nav_analysis/REPORT_20261001_lou1.md
+
+       定位(grodom)会在正常的 200 Hz 位姿流上叠 ~5 次/s、0.05~0.8 m 的不连续
+       (单帧 0.41 m / 5 ms 等效 81 m/s, 物理不可能)。同一条路线两轮对照:
+       位置保持帧 2%(200 Hz 连续流)时横向误差 std 0.108 m, 58%(阶梯流)时 0.190/0.225 m。
+       控制器闭环在这条流上, 会去追一个并不存在的横向偏移。
+
+       这里**只记录、不改位姿**。原因是先在真机数据上回放验证过"限幅/丢弃"闸门:
+       三轮数据、阈值 0.003~0.20 m 全扫, 只要还想保住位置估计的可用性(保留 >=95%
+       的交付位移), 横向误差峰值一点不降(0.768 -> 0.768 m); 想把峰值压到 0.52 m
+       得扔 45% 的运动量。那几次摆动是十几次同向修正连续叠加 1~2 s 形成的平台,
+       不是单帧尖峰 —— 速率限制器只能让它慢, 慢到有意义就等于把运动也限制掉。
+       所以控制通路上不留任何与该平台对抗的机构; 这个诊断只是把现象记进 CSV 的
+       odom_jump 列 (并在会话结束打一条 WARN), 供离线分析和定位侧改动取证。 -->
+  <param name="closed_loop_controller/odom_jump_max_residual" value="0.20" type="double"/>
+  <param name="closed_loop_controller/odom_jump_window" value="0.30" type="double"/>
+
 </launch>

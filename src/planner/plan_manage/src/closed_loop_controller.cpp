@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -40,15 +41,55 @@ int traj_id = 0;
 Eigen::Vector3d odom_pos = Eigen::Vector3d::Zero();
 double odom_yaw = 0.0;
 // Diagnostics only (no effect on control):
-//   odom_cov_          localization quality, straight from /hand_lio/odom_vehicle
-//   odom_msg_stamp_    stamp of the last odometry message
-//   odom_change_stamp_ stamp of the last message whose pose VALUE differed
+//   odom_cov_               localization quality, straight from /hand_lio/odom_vehicle
+//   odom_msg_stamp_         stamp of the last odometry message
+//   odom_pos_change_stamp_  stamp of the last message whose POSITION value differed
 // The last two are different failure modes and the log must tell them apart:
 // a stream that is LATE (localization backlog / stale stream) vs a stream that
 // is on time but repeats the same pose (staircase content). Only the pair does.
+// odom_age in the CSV is now derived from odom_pos_change_stamp_ (位置), not from
+// "任一分量变过": 阶梯式输出里位置保持而偏航还在动的那些帧, 旧口径会报成"新鲜",
+// 而位置环真正吃的就是这个位置值。
 double odom_cov_ = std::numeric_limits<double>::quiet_NaN();
 ros::Time odom_msg_stamp_;
-ros::Time odom_change_stamp_;
+// 位置 / 偏航**分别**记"值最后一次变化"的时刻。必须分开: 实测的阶梯式输出里
+// 位置保持的那些帧偏航还在动, 若共用同一个时间戳, 位置那一跳的 dt 会被偏航刷新成
+// 5 ms, 合法的分块位移就会被误判成跳变 —— 用真机数据回放验证过: 共用时间戳会拦下
+// 190 次/s 并把轨迹彻底冻住; 分开之后只拦真正不可能的尖峰。
+ros::Time odom_pos_change_stamp_;
+ros::Time odom_yaw_change_stamp_;
+
+// ---- 位姿不连续性诊断 (只记录, 不干预控制) ----
+// 实测 (2026-10-01, lou1 上下楼, 见 nav_analysis/REPORT_20261001_lou1.md): grodom 会在
+// 正常 200 Hz 位姿流上叠 ~5 次/s、0.05~0.8 m 的不连续 —— 单帧 0.41 m / 5 ms 等效
+// 81 m/s, 物理不可能。控制器闭环在这条流上, 会去"追"一个并不存在的横向偏移 (实测
+// 一次 +0.41 m 的横向尖峰让控制器真发出 ∫vy dt = -0.25 m 的横向指令)。
+// 同一条路线两轮对照: 位置保持帧 2% (200 Hz 连续流) 时横向误差 std 0.108 m,
+// 58% (阶梯流) 时 0.190/0.225 m。
+//
+// **这里刻意只做诊断, 不碰 p/yaw。** 曾经实现过"限幅/丢弃"的闸门并在真机数据上回放
+// 验证过: 三轮数据、阈值 0.003~0.20 m 全扫, 只要还想保住位置估计的可用性 (保留
+// >=95% 的交付位移), 横向误差峰值一点不降 (0.768 -> 0.768 m); 想把峰值压到 0.52 m
+// 得扔 45% 的运动量, 那时位置估计已经废了。原因: 那几次摆动是十几次**同向**修正连续
+// 叠加 1~2 s 形成的平台, 不是单帧尖峰 —— 速率限制只能让它慢, 慢到有意义就等于把
+// 运动一起限制掉。所以控制通路上不留任何与该平台对抗的机构, 只把这个现象记录下来,
+// 让离线分析 (和定位侧的改动) 有据可查。
+//
+// 判据是"与近期运动预测的残差": pred = 当前位置 + v_recent * (距上次位置变化的时间),
+// residual = |新位置 - pred|。用残差而不是速度, 是因为这条流是阶梯式的 —— 位置刚变过
+// 5 ms 又来一个 0.09 m 的大块, 用 |dp|/dt 算出来 18 m/s, 合法的分块位移会被一起标成
+// 跳变; 残差口径把"保持那段"通过 v_recent 算进去了, 只有真叠上去的尖峰才留下大残差。
+double odom_jump_max_residual_ = 0.20;   // [m] 残差超过它就在 CSV 的 odom_jump 列标 1
+double odom_jump_window_ = 0.30;         // [s] 估 v_recent 的窗口
+unsigned long odom_jump_count_ = 0;      // 本轮计数 (会话结束打一条 WARN)
+bool odom_jump_this_tick_ = false;       // 本 tick 是否标了跳变, 写进 CSV
+// 最近位置历史, 用来估 v_recent (只要窗口两端, 所以 deque 足够)
+struct OdomHistSample
+{
+  ros::Time stamp;
+  Eigen::Vector3d pos;
+};
+std::deque<OdomHistSample> odom_hist_;
 
 double exec_time = 0.0;
 ros::Time last_update_time;
@@ -93,6 +134,21 @@ bool loadParams(const ros::NodeHandle &nh)
   ok &= loadRequiredParam(nh, "finish_dist", finish_dist);
   ok &= loadRequiredParam(nh, "finish_timeout", finish_timeout);
   nh.param<std::string>("log_dir", log_dir, std::string(""));
+  // 位姿不连续性诊断 (只记录, 不影响控制): 两个参数都可选
+  nh.param("odom_jump_max_residual", odom_jump_max_residual_, odom_jump_max_residual_);
+  nh.param("odom_jump_window", odom_jump_window_, odom_jump_window_);
+  if (odom_jump_max_residual_ <= 0.0 || odom_jump_window_ <= 0.0)
+  {
+    ROS_ERROR("[closed_loop_controller] odom_jump_max_residual=%.3f / odom_jump_window=%.3f must be > 0",
+              odom_jump_max_residual_, odom_jump_window_);
+    ok = false;
+  }
+  else
+  {
+    ROS_WARN("[closed_loop_controller] odom jump diagnostics ON (record only, no control effect): "
+             "max_residual=%.2f m window=%.2f s",
+             odom_jump_max_residual_, odom_jump_window_);
+  }
   if (ok && max_vyaw > kMaxVYawLimit)
   {
     ROS_WARN("[closed_loop_controller] cap max_vyaw %.3f to %.3f rad/s.", max_vyaw, kMaxVYawLimit);
@@ -180,14 +236,22 @@ void openLog()
   }
   log_file << std::fixed << std::setprecision(4)
            << "t,traj_id,exec_time,traj_duration,x,y,z,yaw,x_des,y_des,z_des,yaw_des,frozen,vx,vy,vyaw"
-           << ",cov,odom_stamp,odom_age,ff_x,ff_y\n";
+           << ",cov,odom_stamp,odom_age,ff_x,ff_y,odom_jump\n";
   ROS_WARN("[closed_loop_controller] tracking log: %s", path.c_str());
 }
 
 void closeLog()
 {
   if (log_file.is_open())
+  {
+    // 位姿跳变闸门拦下的次数: 这一行的位置在 CSV 里没有列, 所以同时打一条 WARN,
+    // 让 journal / /rosout 也能查到 (bag 里最方便的是 CSV 的 odom_jump 列)。
+    if (odom_jump_count_ > 0)
+      ROS_WARN("[closed_loop_controller] odom discontinuity diagnostics: %lu steps exceeded "
+               "%.2f m residual in this run (recorded only, control unaffected)",
+               odom_jump_count_, odom_jump_max_residual_);
     log_file.close();
+  }
 }
 
 // cmd is exactly what was published on cmd_vel this tick.
@@ -196,11 +260,14 @@ void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des
 {
   if (!log_file.is_open())
     return;
-  // odom_age = how old the pose VALUE is (seconds since it last changed), NOT
-  // since the last message: that is the quantity the controller actually acts
-  // on. -1 = no pose received yet. ff_* = the feed-forward part of the command
-  // (traj tangent at exec_time); the P-term part is kp_pos * (pos_des - odom_pos).
-  const double odom_age = odom_change_stamp_.isZero() ? -1.0 : (now - odom_change_stamp_).toSec();
+  // odom_age = how old the pose POSITION VALUE is (seconds since it last changed),
+  // NOT since the last message: that is the quantity the position loop acts on.
+  // 用位置而不是"任一分量": 阶梯式输出里位置被保持、偏航还在动的帧, 旧口径报 5 ms
+  // 会让人以为反馈是新鲜的。 -1 = 还没收到过位姿。
+  // ff_* = the feed-forward part of the command (traj tangent at exec_time); the
+  // P-term part is kp_pos * (pos_des - odom_pos).
+  const double odom_age =
+      odom_pos_change_stamp_.isZero() ? -1.0 : (now - odom_pos_change_stamp_).toSec();
   Eigen::Vector2d ff(0.0, 0.0);
   if (traj.size() > 1 && traj_duration > 0.0)
   {
@@ -211,7 +278,8 @@ void logRow(const ros::Time &now, const Eigen::Vector3d &pos_des, double yaw_des
            << odom_pos(0) << ',' << odom_pos(1) << ',' << odom_pos(2) << ',' << odom_yaw << ','
            << pos_des(0) << ',' << pos_des(1) << ',' << pos_des(2) << ',' << yaw_des << ','
            << (frozen ? 1 : 0) << ',' << cmd.linear.x << ',' << cmd.linear.y << ',' << cmd.angular.z << ','
-           << odom_cov_ << ',' << odom_msg_stamp_.toSec() << ',' << odom_age << ',' << ff(0) << ',' << ff(1)
+           << odom_cov_ << ',' << odom_msg_stamp_.toSec() << ',' << odom_age << ',' << ff(0) << ',' << ff(1) << ','
+           << (odom_jump_this_tick_ ? 1 : 0)   // 本 tick 是否标了位姿不连续 (纯诊断, 位姿未做任何修改)
            << '\n';
   // Flush about once a second: the node aborts on shutdown (global ros handles
   // outliving roscpp), which would drop whatever is still buffered if the
@@ -289,17 +357,60 @@ void finishTracking(const Eigen::Vector2d &pos_err, bool timed_out)
 
 void odomCallback(const nav_msgs::OdometryConstPtr &msg)
 {
-  const Eigen::Vector3d p(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
-  const double yaw = tf::getYaw(msg->pose.pose.orientation);
+  Eigen::Vector3d p(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+  double yaw = tf::getYaw(msg->pose.pose.orientation);
+  odom_jump_this_tick_ = false;
+
+  // ---- 位姿不连续性诊断 (只记录, 不改 p/yaw, 见文件头 odom_jump_* 的注释) ----
+  // 算出"与近期运动预测的残差", 超阈值就在 CSV 的 odom_jump 列标 1 并计数。
+  // 这里**没有任何控制作用**: 位姿原样使用。
+  if (!odom_pos_change_stamp_.isZero())
+  {
+    const double dt = (msg->header.stamp - odom_pos_change_stamp_).toSec();
+    if (dt > 0.0)
+    {
+      Eigen::Vector3d v_recent = Eigen::Vector3d::Zero();
+      if (!odom_hist_.empty())
+      {
+        const double span = (msg->header.stamp - odom_hist_.front().stamp).toSec();
+        if (span > 1e-3)
+          v_recent = (odom_pos - odom_hist_.front().pos) / span;
+      }
+      const double residual = (p - (odom_pos + v_recent * dt)).norm();
+      if (residual > odom_jump_max_residual_)
+      {
+        odom_jump_this_tick_ = true;
+        ++odom_jump_count_;
+        ROS_WARN_THROTTLE(1.0,
+                          "[closed_loop_controller] odom discontinuity #%lu: residual %.3f m "
+                          "(> %.2f), step %.3f m over %.0f ms, v_recent %.2f m/s "
+                          "(recorded only, pose is used as-is)",
+                          odom_jump_count_, residual, odom_jump_max_residual_,
+                          (p - odom_pos).norm(), dt * 1e3, v_recent.norm());
+      }
+    }
+  }
+
   // A repeated value is not a new pose: grodom republishes the same pose at
-  // 200 Hz, so only an actual VALUE change may reset odom_age.
-  if (!have_odom || (p - odom_pos).norm() > 1e-6 || std::abs(normalizeAngle(yaw - odom_yaw)) > 1e-6)
-    odom_change_stamp_ = msg->header.stamp;
+  // 200 Hz, so only an actual VALUE change may reset the age. 位置与偏航分开记,
+  // 因为 CSV 里的 odom_age 只关心位置值有多旧 (阶梯流里位置保持而偏航还在动的帧,
+  // 旧口径会报 5 ms "新鲜", 而位置环真正吃的就是这个位置值)。
+  if (!have_odom || (p - odom_pos).norm() > 1e-6)
+    odom_pos_change_stamp_ = msg->header.stamp;
+  if (!have_odom || std::abs(normalizeAngle(yaw - odom_yaw)) > 1e-6)
+    odom_yaw_change_stamp_ = msg->header.stamp;
+
   odom_pos = p;
   odom_yaw = yaw;
   odom_cov_ = msg->pose.covariance[0];
   odom_msg_stamp_ = msg->header.stamp;
   have_odom = true;
+
+  // 维护 v_recent 用的位置历史 (只保留最近 odom_jump_window 秒)
+  odom_hist_.push_back({msg->header.stamp, odom_pos});
+  while (!odom_hist_.empty() &&
+         (msg->header.stamp - odom_hist_.front().stamp).toSec() > odom_jump_window_)
+    odom_hist_.pop_front();
 }
 
 void cmdCallback(const ros::TimerEvent &)
