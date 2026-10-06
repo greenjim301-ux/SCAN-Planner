@@ -32,7 +32,10 @@
     <!-- sensor choose -->
     <arg name="sensor_type" value="$(arg sensor_type)"/>
     <arg name="body_pose_topic" value="$(arg body_pose_topic)" />
-    <arg name="sensor_pose_topic" value="$(eval '/latest_imu_odom' if arg('is_real_world') else ('/quad_0/camera_pose' if arg('sensor_type') == 'depth' else '/quad_0/lidar_pose'))" />
+    <!-- 真机上射线原点用 hand_lio 发的 /hand_lio/odom_sensor（口径同 /latest_imu_odom）：hand_lio 的
+         pose_source=fused 会对点云和机体位姿施加同一个修正量，射线原点也必须跟着修正，否则点云、
+         机器人、射线原点三者对不上。pose_source=stream 时它跟 /latest_imu_odom 完全一样。 -->
+    <arg name="sensor_pose_topic" value="$(eval '/hand_lio/odom_sensor' if arg('is_real_world') else ('/quad_0/camera_pose' if arg('sensor_type') == 'depth' else '/quad_0/lidar_pose'))" />
     
     <!-- lidar topic -->
     <arg name="cloud_topic" value="$(eval '/hand_lio/clouds_lidar' if arg('is_real_world') else '/pcl_render_node/cloud')"/>
