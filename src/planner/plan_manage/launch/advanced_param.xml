@@ -16,6 +16,8 @@
   <arg name="max_vel" default="0.75"/>
   <arg name="max_acc" default="2.0"/>
   <arg name="planning_horizon" default="5.0"/>
+  <arg name="waypoint_continuous" default="true"/>
+  <arg name="waypoint_pass_speed" default="0.5"/>
 
   <!-- main node -->
   <!-- required="true": 规划器退出时把整组节点一起带走。closed_loop_controller 是
@@ -39,6 +41,9 @@
     <param name="fsm/thresh_no_replan" value="0.1" type="double"/>
     <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
     <param name="fsm/waypoint_arrival_radius" value="0.3" type="double"/>
+    <!-- Mode 2: intermediate points carry speed; final / sharp turns still stop. -->
+    <param name="fsm/waypoint_continuous" value="$(arg waypoint_continuous)" type="bool"/>
+    <param name="fsm/waypoint_pass_speed" value="$(arg waypoint_pass_speed)" type="double"/>
     <param name="fsm/emergency_time_" value="1.0" type="double"/>
     <param name="fsm/fail_safe" value="true" type="bool"/> 
     <param name="fsm/max_replan_fail_count" value="1000" type="int"/>
@@ -111,6 +116,9 @@
   <param name="closed_loop_controller/finish_dist" value="0.15" type="double"/>
   <!-- max time [s] to keep chasing the endpoint after the traj ends; stops (with a WARN) even if not within finish_dist -->
   <param name="closed_loop_controller/finish_timeout" value="3.0" type="double"/>
+  <!-- A nonzero endpoint may await its successor for at most 150 ms. -->
+  <param name="closed_loop_controller/continuous_handoff" value="$(eval arg('navi_mode') == 2 and arg('waypoint_continuous'))" type="bool"/>
+  <param name="closed_loop_controller/handoff_timeout" value="0.15" type="double"/>
   <!-- one CSV per tracking session (pose, desired pose, cmd_vel at 100 Hz); empty value disables -->
   <param name="closed_loop_controller/log_dir" value="$(optenv HOME /tmp)/scan_planner_track_logs" type="str"/>
 

@@ -57,6 +57,8 @@ namespace scan_planner
     int navi_mode_; // 1 manual select, 2 hard code
     double no_replan_thresh_, replan_thresh_;
     double waypoint_arrival_radius_;
+    bool waypoint_continuous_;
+    double waypoint_pass_speed_;
     std::vector<Eigen::Vector3d> preset_waypoints_;
     int waypoint_num_;
     double planning_horizon_;
@@ -115,6 +117,7 @@ namespace scan_planner
     void planGlobalTrajbyGivenWps();
     bool planGlobalTrajByWaypoints(const std::vector<Eigen::Vector3d> &waypoints);
     bool planNextWaypoint();
+    bool planWaypointReference();
     bool isWaypointSequenceMode() const;
     bool adjustGlobalTargetIfOccupied();
     void getLocalTarget();

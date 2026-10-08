@@ -7,6 +7,8 @@
   <!-- 2: use keypoints to navigate in multi-floor scene -->
   <!-- 3: use reference path to follow and avoid obstacles -->
   <arg name="navi_mode" default="1"/>
+  <arg name="waypoint_continuous" default="true"/>
+  <arg name="waypoint_pass_speed" default="0.5"/>
   <arg name="sensor_type" default="lidar"/>
 
   <!-- map source: set use_pcd_map=true to load pcd_map_file instead of the procedural mockamap -->
@@ -50,6 +52,8 @@
 
     <arg name="is_real_world" value="$(arg is_real_world)"/>
     <arg name="navi_mode" value="$(arg navi_mode)" />
+    <arg name="waypoint_continuous" value="$(arg waypoint_continuous)" />
+    <arg name="waypoint_pass_speed" value="$(arg waypoint_pass_speed)" />
   </include>
 
   <!-- controller mode -->

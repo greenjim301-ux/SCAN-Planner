@@ -1,5 +1,6 @@
 
 #include <plan_manage/scan_replan_fsm.h>
+#include <plan_manage/waypoint_velocity.h>
 #include <cmath>
 
 namespace scan_planner
@@ -8,6 +9,7 @@ namespace scan_planner
   void SCANReplanFSM::init(ros::NodeHandle &nh)
   {
     current_wp_ = 0;
+    end_vel_.setZero();
     exec_state_ = FSM_EXEC_STATE::INIT;
     trigger_ = false;
     have_target_ = false;
@@ -33,6 +35,8 @@ namespace scan_planner
     // radius (0.2 m, see planner_manager.cpp) so odom jitter between this check and the
     // actual replan call never lands back inside the rejection zone.
     nh.param("fsm/waypoint_arrival_radius", waypoint_arrival_radius_, 0.3);
+    nh.param("fsm/waypoint_continuous", waypoint_continuous_, true);
+    nh.param("fsm/waypoint_pass_speed", waypoint_pass_speed_, 0.5);
     nh.param("grid_map/obstacles_inflation_z_up", self_inflation_z_up_, 0.0);
     nh.param("grid_map/obstacles_inflation_z_down", self_inflation_z_down_, 0.0);
     nh.param("grid_map/double_cylinder_radius", self_double_cylinder_radius_, 0.0);
@@ -163,6 +167,7 @@ namespace scan_planner
 
     bool success = false;
     end_pt_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, rviz_goal_height_;
+    end_vel_.setZero();
     success = planner_manager_->planGlobalTraj(odom_pos_, odom_vel_, Eigen::Vector3d::Zero(), end_pt_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
 
     if (success)
@@ -210,6 +215,7 @@ namespace scan_planner
     }
 
     end_pt_ = waypoints.back();
+    end_vel_.setZero();
     std::vector<Eigen::Vector3d> reference_waypoints(waypoints.begin() + 1, waypoints.end());
 
     for (size_t i = 0; i < waypoints.size(); i++)
@@ -278,16 +284,15 @@ namespace scan_planner
     end_pt_ = active_waypoints_[current_wp_];
     setStartStateFromOdomOrCurrentTraj();
 
+    end_vel_ = waypointPassVelocity(
+        start_pt_, end_pt_, active_waypoints_, current_wp_, waypoint_continuous_,
+        waypoint_pass_speed_, planner_manager_->pp_.max_vel_,
+        planner_manager_->pp_.max_acc_, waypoint_arrival_radius_);
+
     // Reference path only -- inheriting the live start_acc_ makes the single-segment
     // quintic bulge metres off the straight line, and getLocalTarget() then picks its
     // target off that bulge instead of off the way to the waypoint.
-    bool success = planner_manager_->planGlobalTraj(
-        start_pt_,
-        start_vel_,
-        Eigen::Vector3d::Zero(),
-        end_pt_,
-        Eigen::Vector3d::Zero(),
-        Eigen::Vector3d::Zero());
+    bool success = planWaypointReference();
 
     if (!success)
     {
@@ -306,13 +311,12 @@ namespace scan_planner
       gloabl_traj[i] = planner_manager_->global_data_.global_traj_.evaluate(i * step_size_t);
     }
 
-    end_vel_.setZero();
     have_target_ = true;
     have_new_target_ = true;
     visualization_->displayGlobalPathList(gloabl_traj, 0.1, 0);
     visualization_->displayGoalPoint(end_pt_, Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, current_wp_);
-    ROS_INFO("[navi_mode=%d] Planning to waypoint %d/%zu: [%.2f, %.2f, %.2f].",
-             navi_mode_, current_wp_ + 1, active_waypoints_.size(), end_pt_(0), end_pt_(1), end_pt_(2));
+    ROS_INFO("[navi_mode=%d] Planning to waypoint %d/%zu: [%.2f, %.2f, %.2f], pass speed %.3f m/s.",
+             navi_mode_, current_wp_ + 1, active_waypoints_.size(), end_pt_(0), end_pt_(1), end_pt_(2), end_vel_.norm());
 
     return true;
   }
@@ -320,6 +324,21 @@ namespace scan_planner
   bool SCANReplanFSM::isWaypointSequenceMode() const
   {
     return navi_mode_ == NAVI_MODE::PRESET_TARGET;
+  }
+
+  bool SCANReplanFSM::planWaypointReference()
+  {
+    if (isWaypointSequenceMode() && waypoint_continuous_)
+    {
+      const auto points = waypointReferencePoints(start_pt_, end_pt_, start_vel_, end_vel_);
+      if (points.size() > 1)
+        return planner_manager_->planGlobalTrajWaypoints(
+            start_pt_, start_vel_, Eigen::Vector3d::Zero(), points,
+            end_vel_, Eigen::Vector3d::Zero());
+    }
+    return planner_manager_->planGlobalTraj(
+        start_pt_, start_vel_, Eigen::Vector3d::Zero(), end_pt_,
+        end_vel_, Eigen::Vector3d::Zero());
   }
 
   bool SCANReplanFSM::adjustGlobalTargetIfOccupied()
@@ -353,6 +372,12 @@ namespace scan_planner
         global_data.last_progress_time_ = std::min(global_data.last_progress_time_, t);
         ROS_WARN("[global target] Target [%.2f, %.2f, %.2f] is occupied; use backward collision-free point [%.2f, %.2f, %.2f].",
                  raw_end(0), raw_end(1), raw_end(2), end_pt_(0), end_pt_(1), end_pt_(2));
+        if (end_vel_.norm() > 1e-3)
+        {
+          // A substituted obstacle endpoint is a stop point, not a through point.
+          end_vel_.setZero();
+          return planWaypointReference();
+        }
         return true;
       }
     }
@@ -880,13 +905,7 @@ namespace scan_planner
 
     // Zero start_acc for the same reason as planNextWaypoint(): this is a reference
     // path, and the live acceleration bulges the single-segment quintic off course.
-    if (!planner_manager_->planGlobalTraj(
-            start_pt_,
-            start_vel_,
-            Eigen::Vector3d::Zero(),
-            end_pt_,
-            Eigen::Vector3d::Zero(),
-            Eigen::Vector3d::Zero()))
+    if (!planWaypointReference())
     {
       ROS_ERROR("[navi_mode=%d] Unable to refresh global trajectory from odom to current target.", navi_mode_);
       return false;
@@ -1148,19 +1167,9 @@ namespace scan_planner
       }
     }
 
-    if ((end_pt_ - local_target_pt_).norm() < (max_vel * max_vel) / (2 * max_acc))
-    {
-      // local_target_vel_ = (end_pt_ - init_pt_).normalized() * planner_manager_->pp_.max_vel_ * (( end_pt_ - local_target_pt_ ).norm() / ((planner_manager_->pp_.max_vel_*planner_manager_->pp_.max_vel_)/(2*planner_manager_->pp_.max_acc_)));
-      // cout << "A" << endl;
-      local_target_vel_ = Eigen::Vector3d::Zero();
-    }
-    else
-    {
-      local_target_vel_ = planner_manager_->global_data_.getVelocity(target_t);
-      if (local_target_vel_.norm() > max_vel)
-        local_target_vel_ = local_target_vel_.normalized() * max_vel;
-      // cout << "AA" << endl;
-    }
+    local_target_vel_ = waypointLocalTargetVelocity(
+        planner_manager_->global_data_.getVelocity(target_t), end_vel_,
+        (end_pt_ - local_target_pt_).norm(), max_vel, max_acc);
   }
 
 } // namespace scan_planner

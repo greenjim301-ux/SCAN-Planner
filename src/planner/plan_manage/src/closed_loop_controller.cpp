@@ -18,6 +18,7 @@
 
 #include "bspline_opt/uniform_bspline.h"
 #include "scan_planner/Bspline.h"
+#include <plan_manage/waypoint_velocity.h>
 
 namespace
 {
@@ -114,6 +115,8 @@ double max_vyaw;
 double turn_vyaw_max;
 double finish_dist;
 double finish_timeout;
+bool continuous_handoff = false;
+double handoff_timeout = 0.15;
 std::string body_pose_topic;
 // Per-session tracking log (pose + cmd_vel every control tick); empty = off.
 std::string log_dir;
@@ -141,6 +144,13 @@ bool loadParams(const ros::NodeHandle &nh)
   ok &= loadRequiredParam(nh, "max_vyaw", max_vyaw);
   ok &= loadRequiredParam(nh, "finish_dist", finish_dist);
   ok &= loadRequiredParam(nh, "finish_timeout", finish_timeout);
+  nh.param("continuous_handoff", continuous_handoff, false);
+  nh.param("handoff_timeout", handoff_timeout, 0.15);
+  if (!std::isfinite(handoff_timeout) || handoff_timeout < 0.0 || handoff_timeout > 0.15)
+  {
+    ROS_ERROR("[closed_loop_controller] handoff_timeout must be in [0, 0.15] seconds.");
+    ok = false;
+  }
   nh.param<std::string>("log_dir", log_dir, std::string(""));
   // 位姿不连续性诊断 (只记录, 不影响控制): 两个参数都可选
   nh.param("odom_jump_max_residual", odom_jump_max_residual_, odom_jump_max_residual_);
@@ -457,6 +467,11 @@ void cmdCallback(const ros::TimerEvent &)
   const double t_eval = std::min(exec_time, traj_duration);
   Eigen::Vector3d pos_des = traj[0].evaluateDeBoorT(t_eval);
   Eigen::Vector3d vel_des = traj[1].evaluateDeBoorT(t_eval);
+  const double terminal_speed = traj[1].evaluateDeBoorT(traj_duration).head<2>().norm();
+  const bool through_endpoint = continuous_handoff && terminal_speed > 0.05;
+  const double end_elapsed = traj_end_time.isZero() ? 0.0 : (now - traj_end_time).toSec();
+  const bool handoff_pending = scan_planner::waypointHandoffPending(
+      continuous_handoff, terminal_speed, end_elapsed, handoff_timeout);
 
   // Settle window after the traj ends. Checked before the heading branch so
   // that turning in place at the end is bounded by it too.
@@ -464,7 +479,17 @@ void cmdCallback(const ros::TimerEvent &)
   {
     if (traj_end_time.isZero())
       traj_end_time = now;
-    else if ((now - traj_end_time).toSec() > finish_timeout)
+    if (through_endpoint && !handoff_pending)
+    {
+      // A new spline normally arrives before this deadline. Never coast on a
+      // nonzero terminal boundary indefinitely if the planner does not deliver it.
+      ROS_WARN("[closed_loop_controller] traj_id=%d: trajectory handoff timed out after %.3f s.",
+               traj_id, handoff_timeout);
+      logRow(now, pos_des, std::numeric_limits<double>::quiet_NaN(), false, geometry_msgs::Twist());
+      finishTracking(Eigen::Vector2d(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1)), false);
+      return;
+    }
+    else if (end_elapsed > finish_timeout)
     {
       logRow(now, pos_des, std::numeric_limits<double>::quiet_NaN(), false, geometry_msgs::Twist());
       finishTracking(Eigen::Vector2d(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1)), true);
@@ -495,6 +520,8 @@ void cmdCallback(const ros::TimerEvent &)
   publishExecutionFrozen(false);
   exec_time = std::min(traj_duration, exec_time + dt);
   last_update_time = now;
+  if (through_endpoint && exec_time >= traj_duration && traj_end_time.isZero())
+    traj_end_time = now;
 
   pos_des = traj[0].evaluateDeBoorT(exec_time);
   vel_des = traj[1].evaluateDeBoorT(exec_time);
@@ -510,7 +537,7 @@ void cmdCallback(const ros::TimerEvent &)
   cmd.linear.y = clamp(-s * vel_world(0) + c * vel_world(1), -max_vy, max_vy);
   cmd.angular.z = vyaw_cmd;
 
-  if (exec_time >= traj_duration && pos_err.norm() < finish_dist)
+  if (exec_time >= traj_duration && pos_err.norm() < finish_dist && !handoff_pending)
   {
     logRow(now, pos_des, yaw_des, false, geometry_msgs::Twist());
     finishTracking(pos_err, false);

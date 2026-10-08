@@ -79,3 +79,10 @@ target_link_libraries(go2_kinematic_sim ${catkin_LIBRARIES})
 
 add_executable(go2_gait_publisher src/go2_gait_publisher.cpp)
 target_link_libraries(go2_gait_publisher ${catkin_LIBRARIES})
+
+if(CATKIN_ENABLE_TESTING)
+  add_executable(waypoint_velocity_test
+    tests/waypoint_velocity_test.cpp
+    ../traj_utils/src/polynomial_traj.cpp)
+  add_test(NAME waypoint_velocity_test COMMAND waypoint_velocity_test)
+endif()
