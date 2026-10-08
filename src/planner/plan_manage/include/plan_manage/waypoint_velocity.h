@@ -21,7 +21,7 @@ inline Eigen::Vector3d waypointPassVelocity(
     const Eigen::Vector3d &from, const Eigen::Vector3d &waypoint,
     const std::vector<Eigen::Vector3d> &waypoints, size_t index,
     bool enabled, double pass_speed, double max_speed, double max_acc,
-    double arrival_radius)
+    double arrival_radius, double max_slope = 0.0)
 {
   const Eigen::Vector3d zero = Eigen::Vector3d::Zero();
   if (!enabled || index >= waypoints.size() || !from.allFinite() ||
@@ -43,6 +43,25 @@ inline Eigen::Vector3d waypointPassVelocity(
   if (in_len < 0.05 || out_len < 0.05 ||
       incoming.head<2>().norm() < 0.05 || outgoing.head<2>().norm() < 0.05)
     return zero;
+
+  // Stairs and steep ramps keep the legacy stop: the dog should not be carried
+  // onto or along them at cruise speed. The incoming slope is taken from the
+  // previous waypoint (none for the first point): odom z can sit a few
+  // decimetres off the route z.
+  if (max_slope > 0.0)
+  {
+    const auto slope = [](const Eigen::Vector3d &d) {
+      return std::abs(d.z()) / std::max(d.head<2>().norm(), 1e-6);
+    };
+    if (slope(outgoing) > max_slope)
+      return zero;
+    if (index > 0)
+    {
+      const Eigen::Vector3d incoming_route = waypoint - waypoints[index - 1];
+      if (incoming_route.head<2>().norm() >= 0.05 && slope(incoming_route) > max_slope)
+        return zero;
+    }
+  }
 
   const Eigen::Vector3d in_dir = incoming / in_len, out_dir = outgoing / out_len;
   const double cosine = std::clamp(in_dir.dot(out_dir), -1.0, 1.0);
@@ -115,6 +134,43 @@ inline Eigen::Vector3d waypointLocalTargetVelocity(
   if (speed > limit && speed > 1e-6)
     return reference_velocity * (limit / speed);
   return reference_velocity;
+}
+// Duration of a straight start->end segment that leaves at v0 and arrives at v1
+// (their components along the segment), accelerating towards max_speed in
+// between. The rest-to-rest allocation forces a dip between two nonzero
+// boundary speeds; this keeps a straight run between pass points at speed.
+// Segments that end at rest keep the legacy (gentler) allocation.
+inline double boundaryAwareSegmentTime(
+    const Eigen::Vector3d &start, const Eigen::Vector3d &end,
+    const Eigen::Vector3d &start_velocity, const Eigen::Vector3d &end_velocity,
+    double max_speed, double max_acc, double fallback)
+{
+  const Eigen::Vector3d segment = end - start;
+  const double length = segment.norm();
+  if (!segment.allFinite() || !start_velocity.allFinite() || !end_velocity.allFinite() ||
+      !std::isfinite(max_speed) || !std::isfinite(max_acc) || max_speed <= 0.0 ||
+      max_acc <= 0.0 || length < 1e-3)
+    return fallback;
+  const Eigen::Vector3d direction = segment / length;
+  const double v0 = std::clamp(start_velocity.dot(direction), 0.0, max_speed);
+  const double v1 = std::clamp(end_velocity.dot(direction), 0.0, max_speed);
+  if (v1 < 1e-3)
+    return fallback;
+  double time;
+  if (std::abs(v0 * v0 - v1 * v1) >= 2.0 * max_acc * length)
+  {
+    time = 2.0 * length / std::max(v0 + v1, 1e-3); // pure speed change
+  }
+  else
+  {
+    const double peak = std::sqrt(max_acc * length + 0.5 * (v0 * v0 + v1 * v1));
+    if (peak <= max_speed)
+      time = (2.0 * peak - v0 - v1) / max_acc;
+    else
+      time = (2.0 * max_speed - v0 - v1) / max_acc +
+          (length - (2.0 * max_speed * max_speed - v0 * v0 - v1 * v1) / (2.0 * max_acc)) / max_speed;
+  }
+  return std::isfinite(time) && time > 1e-3 ? time : fallback;
 }
 } // namespace scan_planner
 

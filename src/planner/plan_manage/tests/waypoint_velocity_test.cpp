@@ -85,6 +85,43 @@ int main()
   check(waypointLocalTargetVelocity(straight_vel, origin, 0.0, 0.75, 2.0).isZero(), "final / obstacle target brakes");
   check(waypointLocalTargetVelocity(Vector3d(0.75, 0, 0), right_vel, 0.01, 0.75, 2.0).norm() <= std::sqrt(0.25 * 0.25 + 0.04) + 1e-9,
         "local speed can decelerate to corner boundary");
+  auto sloped = [&](const std::vector<Vector3d> &route, size_t index) {
+    return waypointPassVelocity(origin, route[index], route, index, true, 0.9, 0.9, 2.0, 0.3, 0.15);
+  };
+  const std::vector<Vector3d> stairs{Vector3d(1.5, 0, 0), Vector3d(3, 0, 0.1), Vector3d(4.5, 0, 0.7),
+                                     Vector3d(6, 0, 1.3), Vector3d(7.5, 0, 1.3), Vector3d(9, 0, 1.3)};
+  check(sloped(stairs, 0).norm() > 0.85, "flat point before a gentle rise keeps speed");
+  check(sloped(stairs, 1).isZero(), "point before stairs stops");
+  check(sloped(stairs, 2).isZero(), "point on stairs stops");
+  check(sloped(stairs, 3).isZero(), "point leaving stairs stops");
+  check(sloped(stairs, 4).norm() > 0.85, "flat point after stairs keeps speed");
+  check(waypointPassVelocity(Vector3d(0, 0, 0.4), stairs[0], stairs, 0, true, 0.9, 0.9, 2.0, 0.3, 0.15).norm() > 0.5,
+        "odom z offset on the first incoming segment is not treated as stairs");
+
+  using scan_planner::boundaryAwareSegmentTime;
+  const Vector3d x_end(1.8, 0, 0), cruise(0.9, 0, 0);
+  check(std::abs(boundaryAwareSegmentTime(origin, x_end, cruise, cruise, 0.9, 2.0, -1.0) - 2.0) < 1e-9,
+        "cruise-to-cruise segment takes length / max speed");
+  check(boundaryAwareSegmentTime(origin, x_end, cruise, origin, 0.9, 2.0, -1.0) == -1.0,
+        "segment ending at rest keeps legacy allocation");
+  const double accelerate = boundaryAwareSegmentTime(origin, x_end, Vector3d(0.3, 0, 0), cruise, 0.9, 2.0, -1.0);
+  check(std::abs(accelerate - (0.3 + (1.8 - (0.81 - 0.09) / 4.0) / 0.9)) < 1e-9, "trapezoid from a lower start speed");
+  const double short_time = boundaryAwareSegmentTime(origin, Vector3d(0.2, 0, 0), Vector3d(0.5, 0, 0), Vector3d(0.5, 0, 0), 0.9, 2.0, -1.0);
+  check(std::abs(short_time - 2.0 * (std::sqrt(0.4 + 0.25) - 0.5) / 2.0) < 1e-9, "triangle when max speed is unreachable");
+  check(std::abs(boundaryAwareSegmentTime(origin, Vector3d(0.1, 0, 0), cruise, Vector3d(0.1, 0, 0), 0.9, 2.0, -1.0) - 0.2) < 1e-9,
+        "pure deceleration uses mean speed");
+  check(std::abs(boundaryAwareSegmentTime(origin, x_end, -cruise, cruise, 0.9, 2.0, -1.0) -
+                 boundaryAwareSegmentTime(origin, x_end, origin, cruise, 0.9, 2.0, -1.0)) < 1e-9,
+        "backward start velocity counts as rest");
+  check(boundaryAwareSegmentTime(origin, origin, cruise, cruise, 0.9, 2.0, -1.0) == -1.0, "degenerate segment falls back");
+  auto steady = PolynomialTraj::one_segment_traj_gen(origin, cruise, origin, x_end, cruise, origin,
+      boundaryAwareSegmentTime(origin, x_end, cruise, cruise, 0.9, 2.0, -1.0));
+  steady.init();
+  double min_speed = 1e9;
+  for (int i = 0; i <= 100; ++i)
+    min_speed = std::min(min_speed, steady.evaluateVel(steady.getTimeSum() * i / 100.0).norm());
+  check(min_speed > 0.9 - 1e-6, "straight initial polynomial between pass points has no speed dip");
+
   check(scan_planner::waypointHandoffPending(true, 0.25, 0.01, 0.15), "nonzero endpoint can await next spline");
   check(!scan_planner::waypointHandoffPending(true, 0.25, 0.15, 0.15), "handoff stops at deadline");
   check(!scan_planner::waypointHandoffPending(true, 0.0, 0.01, 0.15), "final zero endpoint stops immediately");

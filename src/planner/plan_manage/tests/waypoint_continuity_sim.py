@@ -33,11 +33,12 @@ try:
     rospy.Subscriber('/planning/finished', PlanFinished, lambda m: finished.append(m.status))
     pub = rospy.Publisher('/preset_waypoints', Path, queue_size=1)
     results = []
+    ROUTE = [1.5 * (i + 1) for i in range(6)]
     for continuous in (False, True):
         root = ET.Element('launch')
         ET.SubElement(root, 'param', name='body_pose_topic', value='/quad_0/body_pose')
         inc = ET.SubElement(root, 'include', file=str(FilePath(__file__).resolve().parents[1] / 'launch' / 'advanced_param.xml'))
-        args = dict(is_real_world='false', navi_mode='2', sensor_type='lidar', body_pose_topic='/quad_0/body_pose', sensor_pose_topic='/quad_0/body_pose', cloud_topic='/simulation/empty_cloud', cloud_is_world='true', depth_topic='/simulation/depth', cx='320', cy='240', fx='400', fy='400', waypoint_continuous=str(continuous).lower(), waypoint_pass_speed='0.5')
+        args = dict(is_real_world='false', navi_mode='2', sensor_type='lidar', body_pose_topic='/quad_0/body_pose', sensor_pose_topic='/quad_0/body_pose', cloud_topic='/simulation/empty_cloud', cloud_is_world='true', depth_topic='/simulation/depth', cx='320', cy='240', fx='400', fy='400', waypoint_continuous=str(continuous).lower(), waypoint_pass_speed='0', max_vel='0.9')
         for name, value in args.items():
             ET.SubElement(inc, 'arg', name=name, value=value)
         ET.SubElement(root, 'param', name='closed_loop_controller/log_dir', value='')
@@ -55,7 +56,7 @@ try:
         time.sleep(.5)
         samples.clear(); finished.clear()
         route = Path(); route.header.frame_id = 'world'; route.header.stamp = rospy.Time.now()
-        for x in (1.5, 3., 4.5):
+        for x in ROUTE:
             pose = PoseStamped(); pose.pose.position.x = x; pose.pose.position.z = .3; pose.pose.orientation.w = 1
             route.poses.append(pose)
         pub.publish(route)
@@ -64,14 +65,15 @@ try:
             time.sleep(.1)
         assert finished and finished[-1] == 0, 'route did not finish successfully'
         time.sleep(4)
-        windows = [[s[3] for s in samples if abs(s[1] - x) < .15] for x in (1.5, 3.)]
+        windows = [[s[3] for s in samples if abs(s[1] - x) < .15] for x in ROUTE[:-1]]
         assert all(windows), 'no waypoint crossing samples'
         result = dict(continuous=continuous, waypoint_min_speeds=[min(w) for w in windows], final_x=latest[0].pose.pose.position.x, final_speed=samples[-1][3], samples=len(samples))
         results.append(result)
         print(json.dumps(result), flush=True)
         if continuous:
-            assert min(result['waypoint_min_speeds']) > .25, 'continuous passage slowed unexpectedly'
-        assert abs(result['final_x'] - 4.5) < .2 and result['final_speed'] < .01, 'final stop incorrect'
+            # Real-robot spacing (1.5 m) and max_vel (0.9): no dip at interior points.
+            assert min(result['waypoint_min_speeds'][1:]) > .8, 'continuous passage slowed unexpectedly'
+        assert abs(result['final_x'] - ROUTE[-1]) < .2 and result['final_speed'] < .01, 'final stop incorrect'
         os.killpg(launch.pid, signal.SIGINT); launch.wait(timeout=15); launch = None; log.close()
         time.sleep(.5)
     # The ideal simulator does not necessarily reproduce the hardware pause.

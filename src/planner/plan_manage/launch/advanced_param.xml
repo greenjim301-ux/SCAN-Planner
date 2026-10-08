@@ -17,7 +17,7 @@
   <arg name="max_acc" default="2.0"/>
   <arg name="planning_horizon" default="5.0"/>
   <arg name="waypoint_continuous" default="true"/>
-  <arg name="waypoint_pass_speed" default="0.5"/>
+  <arg name="waypoint_pass_speed" default="0"/>
 
   <!-- main node -->
   <!-- required="true": 规划器退出时把整组节点一起带走。closed_loop_controller 是
@@ -41,9 +41,12 @@
     <param name="fsm/thresh_no_replan" value="0.1" type="double"/>
     <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
     <param name="fsm/waypoint_arrival_radius" value="0.3" type="double"/>
-    <!-- Mode 2: intermediate points carry speed; final / sharp turns still stop. -->
+    <!-- Mode 2: intermediate points carry speed; final / sharp turns / stairs still stop.
+         waypoint_pass_speed <= 0 follows manager/max_vel. -->
     <param name="fsm/waypoint_continuous" value="$(arg waypoint_continuous)" type="bool"/>
     <param name="fsm/waypoint_pass_speed" value="$(arg waypoint_pass_speed)" type="double"/>
+    <!-- |dz| / horizontal length above which a point keeps the legacy stop (0.15 ~ 8.5 deg). -->
+    <param name="fsm/waypoint_max_slope" value="0.15" type="double"/>
     <param name="fsm/emergency_time_" value="1.0" type="double"/>
     <param name="fsm/fail_safe" value="true" type="bool"/> 
     <param name="fsm/max_replan_fail_count" value="1000" type="int"/>
@@ -91,6 +94,8 @@
     <param name="manager/control_points_distance" value="0.2" type="double"/>
     <param name="manager/feasibility_tolerance" value="0.5" type="double"/>
     <param name="manager/planning_horizon" value="$(arg planning_horizon)" type="double"/>
+    <!-- Mode 2 continuous: size local initial polynomials for nonzero boundary speeds. -->
+    <param name="manager/boundary_aware_time" value="$(eval arg('navi_mode') == 2 and arg('waypoint_continuous'))" type="bool"/>
 
     <!-- trajectory optimization -->
     <param name="optimization/lambda_smooth" value="1.0" type="double"/>

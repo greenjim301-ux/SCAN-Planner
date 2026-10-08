@@ -59,6 +59,7 @@ namespace scan_planner
     double waypoint_arrival_radius_;
     bool waypoint_continuous_;
     double waypoint_pass_speed_;
+    double waypoint_max_slope_;
     std::vector<Eigen::Vector3d> preset_waypoints_;
     int waypoint_num_;
     double planning_horizon_;

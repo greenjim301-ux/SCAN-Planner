@@ -36,7 +36,8 @@ namespace scan_planner
     // actual replan call never lands back inside the rejection zone.
     nh.param("fsm/waypoint_arrival_radius", waypoint_arrival_radius_, 0.3);
     nh.param("fsm/waypoint_continuous", waypoint_continuous_, true);
-    nh.param("fsm/waypoint_pass_speed", waypoint_pass_speed_, 0.5);
+    nh.param("fsm/waypoint_pass_speed", waypoint_pass_speed_, 0.0);
+    nh.param("fsm/waypoint_max_slope", waypoint_max_slope_, 0.15);
     nh.param("grid_map/obstacles_inflation_z_up", self_inflation_z_up_, 0.0);
     nh.param("grid_map/obstacles_inflation_z_down", self_inflation_z_down_, 0.0);
     nh.param("grid_map/double_cylinder_radius", self_double_cylinder_radius_, 0.0);
@@ -284,10 +285,11 @@ namespace scan_planner
     end_pt_ = active_waypoints_[current_wp_];
     setStartStateFromOdomOrCurrentTraj();
 
+    const double max_vel = planner_manager_->pp_.max_vel_;
     end_vel_ = waypointPassVelocity(
         start_pt_, end_pt_, active_waypoints_, current_wp_, waypoint_continuous_,
-        waypoint_pass_speed_, planner_manager_->pp_.max_vel_,
-        planner_manager_->pp_.max_acc_, waypoint_arrival_radius_);
+        waypoint_pass_speed_ > 0.0 ? waypoint_pass_speed_ : max_vel, max_vel,
+        planner_manager_->pp_.max_acc_, waypoint_arrival_radius_, waypoint_max_slope_);
 
     // Reference path only -- inheriting the live start_acc_ makes the single-segment
     // quintic bulge metres off the straight line, and getLocalTarget() then picks its

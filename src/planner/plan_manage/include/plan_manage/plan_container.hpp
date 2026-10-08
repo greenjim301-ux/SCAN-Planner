@@ -196,6 +196,9 @@ namespace scan_planner
     double ctrl_pt_dist;                  // distance between adjacient B-spline control points
     double feasibility_tolerance_;        // permitted ratio of vel/acc exceeding limits
     double planning_horizon_;
+    // Size the local initial polynomial for its real boundary speeds instead of
+    // a rest-to-rest profile (mode 2 continuous waypoints).
+    bool boundary_aware_time_ = false;
 
     /* processing time */
     double time_search_ = 0.0;

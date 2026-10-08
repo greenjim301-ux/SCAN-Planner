@@ -1,5 +1,6 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
+#include <plan_manage/waypoint_velocity.h>
 #include <thread>
 
 namespace scan_planner
@@ -56,6 +57,7 @@ namespace scan_planner
     nh.param("manager/feasibility_tolerance", pp_.feasibility_tolerance_, 0.0);
     nh.param("manager/control_points_distance", pp_.ctrl_pt_dist, -1.0);
     nh.param("manager/planning_horizon", pp_.planning_horizon_, 5.0);
+    nh.param("manager/boundary_aware_time", pp_.boundary_aware_time_, false);
 
     local_data_.traj_id_ = 0;
     grid_map_.reset(new GridMap);
@@ -121,6 +123,9 @@ namespace scan_planner
 
         double dist = (start_pt - local_target_pt).norm();
         double time = pow(pp_.max_vel_, 2) / pp_.max_acc_ > dist ? sqrt(dist / pp_.max_acc_) : (dist - pow(pp_.max_vel_, 2) / pp_.max_acc_) / pp_.max_vel_ + 2 * pp_.max_vel_ / pp_.max_acc_;
+        if (pp_.boundary_aware_time_)
+          time = boundaryAwareSegmentTime(start_pt, local_target_pt, start_vel, local_target_vel,
+                                          pp_.max_vel_, pp_.max_acc_, time);
 
         if (!flag_randomPolyTraj)
         {
@@ -189,6 +194,10 @@ namespace scan_planner
         t -= ts;
 
         double poly_time = (local_data_.position_traj_.evaluateDeBoorT(t) - local_target_pt).norm() / pp_.max_vel_ * 2;
+        if (pp_.boundary_aware_time_)
+          poly_time = boundaryAwareSegmentTime(local_data_.position_traj_.evaluateDeBoorT(t), local_target_pt,
+                                               local_data_.velocity_traj_.evaluateDeBoorT(t), local_target_vel,
+                                               pp_.max_vel_, pp_.max_acc_, poly_time);
         if (poly_time > ts)
         {
           PolynomialTraj gl_traj = PolynomialTraj::one_segment_traj_gen(local_data_.position_traj_.evaluateDeBoorT(t),
