@@ -81,7 +81,7 @@ namespace scan_planner
     double escape_search_radius_, escape_margin_, escape_reach_dist_, escape_timeout_, escape_abort_eps_;
     bool escape_allow_unknown_;
     StuckDetector stuck_detector_;
-    Eigen::Vector3d escape_target_;
+    Eigen::Vector3d escape_target_, escape_start_pos_;
     double escape_yaw_;
     std::vector<Eigen::Vector2d> escape_obstacles_; // map snapshot the escape path was checked against
     ros::Time escape_start_time_;

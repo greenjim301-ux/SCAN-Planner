@@ -7,7 +7,9 @@ usage (workspace root, focal schroot, after sourcing devel):
   python3 src/SCAN-Planner/src/planner/plan_manage/tests/escape_sim.py [wall_half_y] [goal_x goal_y]
 e.g. "5.0 3.0 0.0" (goal behind a long wall: planner fails -> stuck -> escape backs up 0.2 m).
 --intruder: as soon as the escape goal is sent, put a person-sized block right behind the
-robot's escape target and slow the escape to 0.1 m/s; expect [escape] New obstacle -> ESCAPE_SAFETY."""
+robot's escape target and slow the escape to 0.1 m/s; expect [escape] New obstacle -> ESCAPE_SAFETY.
+--drift: add a side wall 0.45 m to the left and, once the escape starts, inject extra sideways
+cmd_vel towards it (a slipping robot); expect [escape] Off the escape line -> ESCAPE_SAFETY."""
 import math, os, signal, socket, subprocess, sys, time
 import xml.etree.ElementTree as ET
 import rospy
@@ -20,7 +22,8 @@ from std_msgs.msg import Header
 from pathlib import Path as FilePath
 PKG = str(FilePath(__file__).resolve().parents[1])
 INTRUDER = '--intruder' in sys.argv
-sys.argv = [a for a in sys.argv if a != '--intruder']
+DRIFT = '--drift' in sys.argv
+sys.argv = [a for a in sys.argv if a not in ('--intruder', '--drift')]
 WALL_HALF = float(sys.argv[1]) if len(sys.argv) > 1 else 5.0
 GOAL = (float(sys.argv[2]), float(sys.argv[3])) if len(sys.argv) > 3 else (3.0, 0.0)
 with socket.socket() as probe:
@@ -42,6 +45,10 @@ try:
     rospy.Subscriber('/planning/escape_goal', PoseStamped, lambda m: goals.append((time.monotonic(), m.pose.position.x, m.pose.position.y)))
     wp_pub = rospy.Publisher('/preset_waypoints', Path, queue_size=1)
     cloud_pub = rospy.Publisher('/simulation/cloud', PointCloud2, queue_size=1)
+    push_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+    stops = []
+    from std_msgs.msg import Empty
+    rospy.Subscriber('/planning/stop', Empty, lambda m: stops.append(time.monotonic()))
 
     pts = []
     y = -WALL_HALF
@@ -51,6 +58,12 @@ try:
             pts.append((0.25, y, z)); pts.append((0.30, y, z)); pts.append((-3.0, y, z))
             z += 0.05
         y += 0.05
+    if DRIFT:
+        x = -3.0
+        while x <= 0.3:
+            for z in [0.05 * k for k in range(21)]:
+                pts.append((x, 0.45, z)); pts.append((x, 0.50, z))
+            x += 0.05
 
     root = ET.Element('launch')
     ET.SubElement(root, 'param', name='body_pose_topic', value='/quad_0/body_pose')
@@ -89,7 +102,15 @@ try:
             p = latest[0].pose.pose
             trace.append((time.monotonic() - t0, p.position.x, p.position.y,
                           2 * math.atan2(p.orientation.z, p.orientation.w)))
-            time.sleep(.05)
+            # the slip lasts until the planner reacts (planning/stop), not beyond
+            if DRIFT and goals and not stops and time.monotonic() - goals[0][0] < 3.0:
+                # interleave with the controller's 100 Hz commands: net sideways slip towards the wall
+                for _ in range(10):
+                    push = Twist(); push.linear.y = 0.6
+                    push_pub.publish(push)
+                    time.sleep(.005)
+            else:
+                time.sleep(.05)
     pump(3.0)
     route = Path(); route.header.frame_id = 'world'
     wp = PoseStamped(); wp.pose.position.x, wp.pose.position.y = GOAL; wp.pose.position.z = .3; wp.pose.orientation.w = 1

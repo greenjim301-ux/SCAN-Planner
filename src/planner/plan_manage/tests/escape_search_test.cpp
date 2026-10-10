@@ -171,6 +171,53 @@ int main()
           "one-voxel flicker ignored");
   }
 
+  /* ---------- drifting off the escape line towards an unchanged wall ---------- */
+  {
+    using scan_planner::firstClearanceDrop;
+    using scan_planner::footprintClearanceAt;
+    using scan_planner::plannedClearanceAt;
+    using scan_planner::segmentClearanceProfile;
+    // Side wall at y = 0.45; the escape runs along it from (0,0) to (-0.4,0): 0.25 m
+    // from the footprint segment the whole way (yaw 0, segment along x).
+    std::vector<Vector2d> obs;
+    wall(obs, Vector2d(-2.0, 0.45), Vector2d(2.0, 0.45));
+    const Vector2d s(0.0, 0.0), t(-0.4, 0.0);
+    // Drifting 0.15 m (0.45 -> 0.30) still leaves the required 0.30 m: no stop, by design (cap).
+    check(!(std::min(footprintClearanceAt(Vector2d(-0.2, 0.15), 0.0, obs, 0.1), 0.35) <
+            std::min(plannedClearanceAt(s, t, Vector2d(-0.2, 0.15), 0.0, obs, 0.1), 0.35) - 0.08),
+          "drift that keeps the required clearance is allowed");
+    const Vector2d drifted(-0.2, 0.25); // slid 0.25 m towards the wall halfway
+    const double planned = plannedClearanceAt(s, t, drifted, 0.0, obs, 0.1);
+    const double now = footprintClearanceAt(drifted, 0.0, obs, 0.1);
+    check(std::abs(planned - 0.45) < 1e-6 && std::abs(now - 0.20) < 1e-6, "0.45 m planned there, 0.20 m after drifting");
+    // The map-change check redrawn from the drifted pose sees nothing ...
+    check(firstClearanceDrop(segmentClearanceProfile(drifted, t, 0.0, obs, 0.1, 0.05),
+                             segmentClearanceProfile(drifted, t, 0.0, obs, 0.1, 0.05), 0.35, 0.08) == -1,
+          "wall vs. itself: map-change check blind to drift");
+    // ... the drift check does (capped like in the FSM).
+    check(std::min(now, 0.35) < std::min(planned, 0.35) - 0.08, "drift check fires: 0.20 < 0.35 - 0.08");
+
+    // The reported case: planned 0.25 m before drifting, 0.10 m after, wall unchanged.
+    std::vector<Vector2d> near;
+    wall(near, Vector2d(-2.0, 0.25), Vector2d(2.0, 0.25));
+    const double p25 = plannedClearanceAt(s, t, Vector2d(-0.2, 0.15), 0.0, near, 0.1);
+    const double n10 = footprintClearanceAt(Vector2d(-0.2, 0.15), 0.0, near, 0.1);
+    check(std::abs(p25 - 0.25) < 1e-6 && std::abs(n10 - 0.10) < 1e-6, "reported case: 0.25 planned, 0.10 now");
+    check(firstClearanceDrop(segmentClearanceProfile(Vector2d(-0.2, 0.15), t, 0.0, near, 0.1, 0.05),
+                             segmentClearanceProfile(Vector2d(-0.2, 0.15), t, 0.0, near, 0.1, 0.05), 0.35, 0.08) == -1,
+          "reported case: old check misses it");
+    check(std::min(n10, 0.35) < std::min(p25, 0.35) - 0.08, "reported case: drift check fires (0.10 < 0.17)");
+    // Small lateral jitter does not.
+    check(!(std::min(footprintClearanceAt(Vector2d(-0.2, 0.05), 0.0, near, 0.1), 0.35) < std::min(p25, 0.35) - 0.08),
+          "5 cm jitter ignored");
+    // Yaw drift rotates the front circle towards the wall: the actual yaw is used.
+    check(footprintClearanceAt(Vector2d(-0.2, 0.0), 0.6, obs, 0.1) < footprintClearanceAt(Vector2d(-0.2, 0.0), 0.0, obs, 0.1),
+          "yaw drift reduces clearance");
+    // Projection is clamped to the segment.
+    check(std::abs(plannedClearanceAt(s, t, Vector2d(0.3, 0.0), 0.0, obs, 0.1) -
+                   footprintClearanceAt(s, 0.0, obs, 0.1)) < 1e-9, "projection clamped at the start");
+  }
+
   std::cout << "escape_search_test: " << checks << " checks passed\n";
   return 0;
 }

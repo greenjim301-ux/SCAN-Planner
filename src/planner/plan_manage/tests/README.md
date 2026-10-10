@@ -104,9 +104,13 @@ FSM 进入 `ESCAPE`：在 `fsm/escape_search_radius`（1 m）内找最近的点�
 （封顶在所需间距），任一点下降超过 `fsm/escape_abort_eps`（0.08 m，需大于一个体素）即急停
 （`ESCAPE_SAFETY` → EMERGENCY_STOP，fail_safe 后回到 GEN_NEW_TRAJ，仍卡住则 10 s 后按新地图重新搜索）。
 逐点而不是取路径最小值，是为了不让起点旁边那面墙把路径后段的闯入"遮住"。
+上面的比较两边都从当前位置画线，只能发现地图变化；狗偏离原路线（侧滑、航向漂移、定位跳变）贴向一面
+没变的墙时，两边算出同样的值。所以另加一条：当前位置在实时地图、实际航向下的机身间距，与原路线上
+同一进度（投影）处规划时的间距比较，低于后者 `escape_abort_eps` 以上同样急停。
 `escape_timeout` 应大于 `escape_search_radius / escape_speed`（默认 1 m / 0.3 m/s ≈ 3.3 s < 5 s）。
 
 闭环仿真：`tests/escape_sim.py 5.0 3.0 0.0`（正常脱困）、加 `--intruder`（脱困开始后在目标点后方放一个人，
-脱困降速到 0.1 m/s，应在约 0.15 s 内 ESCAPE_SAFETY）。
+脱困降速到 0.1 m/s，应在约 0.15 s 内 ESCAPE_SAFETY）、加 `--drift`（左侧 0.45 m 加侧墙，脱困开始后注入朝墙的
+横向指令模拟侧滑，直到收到 `/planning/stop`；应报 `Off the escape line` 并在碰墙前停下）。
 
 纯逻辑单测：`ctest -R escape_search_test --output-on-failure`。

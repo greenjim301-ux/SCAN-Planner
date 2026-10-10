@@ -587,6 +587,7 @@ namespace scan_planner
     }
 
     escape_target_ = Eigen::Vector3d(res.target.x(), res.target.y(), z);
+    escape_start_pos_ = odom_pos_;
     escape_yaw_ = yaw;
     escape_obstacles_ = std::move(obstacles);
     escape_start_time_ = ros::Time::now();
@@ -652,16 +653,35 @@ namespace scan_planner
     // trajectory safety check does. Comparing live vs. snapshot on the same
     // geometry, sample by sample, keeps the obstacle we were stuck against
     // from tripping it without letting it mask an intrusion further along.
+    //
+    // That comparison only sees map changes: both sides are drawn from the
+    // current pose, so a robot that drifts off the planned line towards an
+    // unchanged wall compares the wall with itself. Hence the second check
+    // below: the clearance where the robot actually is (live map, actual yaw)
+    // against what was planned at the same progress along the original line.
     const Eigen::Vector2d from = odom_pos_.head<2>();
     const Eigen::Vector2d to = escape_target_.head<2>();
-    if ((to - from).norm() < escape_reach_dist_)
-      return; // arriving; execFSMCallback finishes the escape
 
     // Beyond the required clearance nothing matters, so cap both sides there.
     const double cap = self_double_cylinder_radius_ + escape_margin_ + escape_reach_dist_;
     const double res = planner_manager_->grid_map_->getResolution();
     const Eigen::Vector2d pad = Eigen::Vector2d::Constant(self_double_cylinder_offset_ + cap + res);
     const std::vector<Eigen::Vector2d> live = collectPlanarObstacles(from.cwiseMin(to) - pad, from.cwiseMax(to) + pad);
+
+    const double here_live = std::min(cap, footprintClearanceAt(from, getOdomYaw(), live, self_double_cylinder_offset_));
+    const double here_plan = std::min(cap, plannedClearanceAt(escape_start_pos_.head<2>(), to, from, escape_yaw_,
+                                                              escape_obstacles_, self_double_cylinder_offset_));
+    if (here_live < here_plan - escape_abort_eps_)
+    {
+      ROS_WARN("[escape] Off the escape line and closer to obstacles: clearance %.2f m, planned %.2f m here. Emergency stop!",
+               here_live, here_plan);
+      flag_escape_emergency_ = true;
+      changeFSMExecState(EMERGENCY_STOP, "ESCAPE_SAFETY");
+      return;
+    }
+
+    if ((to - from).norm() < escape_reach_dist_)
+      return; // arriving; execFSMCallback finishes the escape
 
     const std::vector<double> live_c =
         segmentClearanceProfile(from, to, escape_yaw_, live, self_double_cylinder_offset_, res);

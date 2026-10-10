@@ -156,6 +156,28 @@ inline std::vector<double> segmentClearanceProfile(const Eigen::Vector2d &from, 
   return profile;
 }
 
+// Footprint clearance at one pose against a plain obstacle list.
+inline double footprintClearanceAt(const Eigen::Vector2d &pos, double yaw,
+                                   const std::vector<Eigen::Vector2d> &obstacles, double body_offset)
+{
+  return segmentClearanceProfile(pos, pos, yaw, obstacles, body_offset, 1.0).front();
+}
+
+// Clearance the escape was planned with at the robot's progress along the
+// original straight line start -> target (pos projected onto it, clamped to
+// the segment). This is the reference a robot that drifted off the line is
+// compared against: re-drawing the line from the drifted pose would compare
+// the wall with itself and never notice the robot got closer to it.
+inline double plannedClearanceAt(const Eigen::Vector2d &start, const Eigen::Vector2d &target,
+                                 const Eigen::Vector2d &pos, double yaw,
+                                 const std::vector<Eigen::Vector2d> &snapshot, double body_offset)
+{
+  const Eigen::Vector2d d = target - start;
+  const double len2 = d.squaredNorm();
+  const double t = len2 > 1e-12 ? std::max(0.0, std::min(1.0, (pos - start).dot(d) / len2)) : 0.0;
+  return footprintClearanceAt(start + t * d, yaw, snapshot, body_offset);
+}
+
 // Whether the live map got closer than the snapshot anywhere along the
 // remaining escape path. Compared sample by sample, not by the path minimum,
 // so the obstacle right next to the start cannot mask an intrusion further
