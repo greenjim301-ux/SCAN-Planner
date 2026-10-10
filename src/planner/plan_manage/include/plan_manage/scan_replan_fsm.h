@@ -78,10 +78,12 @@ namespace scan_planner
        free spot, then resume the normal flow from GEN_NEW_TRAJ. */
     bool escape_enable_;
     double stuck_timeout_, stuck_min_dist_, stuck_min_yaw_;
-    double escape_search_radius_, escape_margin_, escape_reach_dist_, escape_timeout_;
+    double escape_search_radius_, escape_margin_, escape_reach_dist_, escape_timeout_, escape_abort_eps_;
     bool escape_allow_unknown_;
     StuckDetector stuck_detector_;
     Eigen::Vector3d escape_target_;
+    double escape_yaw_;
+    std::vector<Eigen::Vector2d> escape_obstacles_; // map snapshot the escape path was checked against
     ros::Time escape_start_time_;
 
     /* planning data */
@@ -145,6 +147,8 @@ namespace scan_planner
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
     bool checkStuckAndStartEscape();
+    void checkEscapeSafety();
+    std::vector<Eigen::Vector2d> collectPlanarObstacles(const Eigen::Vector2d &lo, const Eigen::Vector2d &hi);
     void finishEscape(const char *reason);
 
     /* ROS functions */

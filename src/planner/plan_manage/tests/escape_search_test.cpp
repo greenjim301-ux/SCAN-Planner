@@ -137,6 +137,40 @@ int main()
     check(r.target.y() > 0.3 && r.target.x() < -0.1, "partial veto: back-left, not into the wall");
   }
 
+  /* ---------- watching the remaining path: profile + sample-wise drop ---------- */
+  {
+    using scan_planner::firstClearanceDrop;
+    using scan_planner::segmentClearanceProfile;
+    const Vector2d target(-0.2, 0.0);
+    std::vector<Vector2d> snap;
+    const auto empty = segmentClearanceProfile(start, target, 0.0, snap, 0.1, 0.05);
+    check(empty.size() == 5 && std::isinf(empty.front()), "no obstacles: infinite, 0.2 m / 0.05 m -> 5 samples");
+    wall(snap, Vector2d(0.25, -2.0), Vector2d(0.25, 2.0));
+    const auto planned = segmentClearanceProfile(start, target, 0.0, snap, 0.1, 0.05);
+    check(std::abs(planned.front() - 0.15) < 1e-6 && std::abs(planned.back() - 0.35) < 1e-6, "wall: 0.15 at start, 0.35 at target");
+    check(firstClearanceDrop(planned, segmentClearanceProfile(start, target, 0.0, snap, 0.1, 0.05), 0.35, 0.08) == -1,
+          "unchanged map: no drop");
+
+    // Someone 0.2 m behind the rear circle at the target. The path minimum is still the
+    // wall (0.15) -- a min-based check would miss it; the sample-wise one does not.
+    std::vector<Vector2d> live = snap;
+    live.push_back(Vector2d(-0.5, 0.0));
+    const auto now = segmentClearanceProfile(start, target, 0.0, live, 0.1, 0.05);
+    check(*std::min_element(now.begin(), now.end()) == *std::min_element(planned.begin(), planned.end()),
+          "intruder hidden behind the wall in the path minimum");
+    check(firstClearanceDrop(planned, now, 0.35, 0.08) > 0, "intruder detected sample-wise");
+
+    // A far change (beyond the cap) and voxel flicker (< eps) do not stop the robot.
+    std::vector<Vector2d> far = snap;
+    far.push_back(Vector2d(-1.0, 0.0));
+    check(firstClearanceDrop(planned, segmentClearanceProfile(start, target, 0.0, far, 0.1, 0.05), 0.35, 0.08) == -1,
+          "far obstacle ignored");
+    std::vector<Vector2d> flicker = snap;
+    wall(flicker, Vector2d(0.2, -2.0), Vector2d(0.2, 2.0)); // wall grows one voxel
+    check(firstClearanceDrop(planned, segmentClearanceProfile(start, target, 0.0, flicker, 0.1, 0.05), 0.35, 0.08) == -1,
+          "one-voxel flicker ignored");
+  }
+
   std::cout << "escape_search_test: " << checks << " checks passed\n";
   return 0;
 }

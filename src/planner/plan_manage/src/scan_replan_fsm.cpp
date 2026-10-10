@@ -53,6 +53,7 @@ namespace scan_planner
     nh.param("fsm/escape_reach_dist", escape_reach_dist_, 0.05);
     nh.param("fsm/escape_timeout", escape_timeout_, 5.0);
     nh.param("fsm/escape_allow_unknown", escape_allow_unknown_, false);
+    nh.param("fsm/escape_abort_eps", escape_abort_eps_, 0.08);
 
     /* initialize main modules */
     visualization_.reset(new PlanningVisualization(nh));
@@ -558,26 +559,11 @@ namespace scan_planner
     // The controller may stop up to escape_reach_dist short of the target.
     params.target_pad = escape_reach_dist_;
 
-    // Raw (not inflated) obstacles in the same height band the inflated map
-    // uses: an obstacle voxel at z_o blocks [z_o - z_down, z_o + z_up].
     const double required = params.body_radius + params.margin;
     const double half = params.search_radius + params.body_offset + required + params.target_pad + 2.0 * params.resolution;
-    Eigen::Vector3i lo, hi;
-    map->posToIndex(odom_pos_ - Eigen::Vector3d(half, half, self_inflation_z_up_), lo);
-    map->posToIndex(odom_pos_ + Eigen::Vector3d(half, half, self_inflation_z_down_), hi);
-    std::vector<Eigen::Vector2d> obstacles;
-    for (int x = lo.x(); x <= hi.x(); ++x)
-      for (int y = lo.y(); y <= hi.y(); ++y)
-        for (int z = lo.z(); z <= hi.z(); ++z)
-        {
-          const Eigen::Vector3i id(x, y, z);
-          if (map->getOccupancy(id) != 1)
-            continue;
-          Eigen::Vector3d pos;
-          map->indexToPos(id, pos);
-          obstacles.push_back(pos.head<2>());
-          break; // one hit per column is enough for a planar distance
-        }
+    const Eigen::Vector2d center = odom_pos_.head<2>();
+    std::vector<Eigen::Vector2d> obstacles =
+        collectPlanarObstacles(center - Eigen::Vector2d::Constant(half), center + Eigen::Vector2d::Constant(half));
 
     const double z = odom_pos_.z();
     auto target_ok = [&](const Eigen::Vector2d &xy)
@@ -601,6 +587,8 @@ namespace scan_planner
     }
 
     escape_target_ = Eigen::Vector3d(res.target.x(), res.target.y(), z);
+    escape_yaw_ = yaw;
+    escape_obstacles_ = std::move(obstacles);
     escape_start_time_ = ros::Time::now();
 
     // Park the local traj at the current pose so nothing downstream keeps
@@ -632,12 +620,75 @@ namespace scan_planner
     return true;
   }
 
+  std::vector<Eigen::Vector2d> SCANReplanFSM::collectPlanarObstacles(const Eigen::Vector2d &lo_xy, const Eigen::Vector2d &hi_xy)
+  {
+    // Raw (not inflated) obstacles in the same height band the inflated map
+    // uses: an obstacle voxel at z_o blocks [z_o - z_down, z_o + z_up].
+    auto map = planner_manager_->grid_map_;
+    Eigen::Vector3i lo, hi;
+    map->posToIndex(Eigen::Vector3d(lo_xy.x(), lo_xy.y(), odom_pos_.z() - self_inflation_z_up_), lo);
+    map->posToIndex(Eigen::Vector3d(hi_xy.x(), hi_xy.y(), odom_pos_.z() + self_inflation_z_down_), hi);
+    std::vector<Eigen::Vector2d> obstacles;
+    for (int x = lo.x(); x <= hi.x(); ++x)
+      for (int y = lo.y(); y <= hi.y(); ++y)
+        for (int z = lo.z(); z <= hi.z(); ++z)
+        {
+          const Eigen::Vector3i id(x, y, z);
+          if (map->getOccupancy(id) != 1)
+            continue;
+          Eigen::Vector3d pos;
+          map->indexToPos(id, pos);
+          obstacles.push_back(pos.head<2>());
+          break; // one hit per column is enough for a planar distance
+        }
+    return obstacles;
+  }
+
+  void SCANReplanFSM::checkEscapeSafety()
+  {
+    // The escape path was checked once against escape_obstacles_. While moving,
+    // re-check what is left of it against the live map: if the clearance there
+    // has dropped (someone / something entered), stop exactly like the
+    // trajectory safety check does. Comparing live vs. snapshot on the same
+    // geometry, sample by sample, keeps the obstacle we were stuck against
+    // from tripping it without letting it mask an intrusion further along.
+    const Eigen::Vector2d from = odom_pos_.head<2>();
+    const Eigen::Vector2d to = escape_target_.head<2>();
+    if ((to - from).norm() < escape_reach_dist_)
+      return; // arriving; execFSMCallback finishes the escape
+
+    // Beyond the required clearance nothing matters, so cap both sides there.
+    const double cap = self_double_cylinder_radius_ + escape_margin_ + escape_reach_dist_;
+    const double res = planner_manager_->grid_map_->getResolution();
+    const Eigen::Vector2d pad = Eigen::Vector2d::Constant(self_double_cylinder_offset_ + cap + res);
+    const std::vector<Eigen::Vector2d> live = collectPlanarObstacles(from.cwiseMin(to) - pad, from.cwiseMax(to) + pad);
+
+    const std::vector<double> live_c =
+        segmentClearanceProfile(from, to, escape_yaw_, live, self_double_cylinder_offset_, res);
+    const std::vector<double> plan_c =
+        segmentClearanceProfile(from, to, escape_yaw_, escape_obstacles_, self_double_cylinder_offset_, res);
+    const int i = firstClearanceDrop(plan_c, live_c, cap, escape_abort_eps_);
+    if (i < 0)
+      return;
+
+    ROS_WARN("[escape] New obstacle on the escape path %.2f m ahead: clearance %.2f m (was %.2f m), %.2f m before the target. "
+             "Emergency stop!",
+             (to - from).norm() * i / std::max<size_t>(1, plan_c.size() - 1), live_c[i], std::min(cap, plan_c[i]),
+             (to - from).norm());
+    flag_escape_emergency_ = true;
+    changeFSMExecState(EMERGENCY_STOP, "ESCAPE_SAFETY");
+  }
+
   void SCANReplanFSM::finishEscape(const char *reason)
   {
     // Back to the original flow; the stuck window restarts from here. The
     // controller drops the escape when the next bspline arrives (or stops on
     // its own at the target / its own timeout).
     stuck_detector_.reset();
+    // Re-park the local traj where we are now. Left at the escape start (inside
+    // the inflated zone), checkCollisionCallback would flag it on the first
+    // GEN_NEW_TRAJ tick and fire a spurious "Suddenly discovered obstacles" stop.
+    planner_manager_->EmergencyStop(odom_pos_);
     changeFSMExecState(GEN_NEW_TRAJ, reason);
   }
 
@@ -1111,7 +1162,13 @@ namespace scan_planner
     LocalTrajData *info = &planner_manager_->local_data_;
     auto map = planner_manager_->grid_map_;
 
-    if (exec_state_ == WAIT_TARGET || exec_state_ == ESCAPE || info->start_time_.toSec() < 1e-5)
+    if (exec_state_ == ESCAPE)
+    {
+      checkEscapeSafety();
+      return;
+    }
+
+    if (exec_state_ == WAIT_TARGET || info->start_time_.toSec() < 1e-5)
       return;
 
     /* ---------- check trajectory ---------- */

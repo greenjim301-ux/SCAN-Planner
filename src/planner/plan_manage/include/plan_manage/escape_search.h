@@ -131,6 +131,45 @@ inline double footprintClearance(const LocalDistanceGrid &grid, const Eigen::Vec
   return d;
 }
 
+// Footprint clearance (heading fixed at yaw) at evenly spaced samples along the
+// straight segment from -> to, both ends included, against a plain obstacle
+// list (infinity where there are none). The sample count depends only on the
+// geometry, so two calls with the same from/to/step line up sample by sample.
+inline std::vector<double> segmentClearanceProfile(const Eigen::Vector2d &from, const Eigen::Vector2d &to, double yaw,
+                                                   const std::vector<Eigen::Vector2d> &obstacles, double body_offset,
+                                                   double step)
+{
+  const Eigen::Vector2d h(std::cos(yaw), std::sin(yaw));
+  const int n = std::max(1, static_cast<int>(std::ceil((to - from).norm() / step)));
+  constexpr int kSamples = 5;
+  std::vector<double> profile(n + 1, std::numeric_limits<double>::infinity());
+  for (int i = 0; i <= n; ++i)
+  {
+    const Eigen::Vector2d c = from + (to - from) * (double(i) / n);
+    for (int k = 0; k < kSamples; ++k)
+    {
+      const Eigen::Vector2d q = c + (-1.0 + 2.0 * k / (kSamples - 1)) * body_offset * h;
+      for (const auto &o : obstacles)
+        profile[i] = std::min(profile[i], (o - q).norm());
+    }
+  }
+  return profile;
+}
+
+// Whether the live map got closer than the snapshot anywhere along the
+// remaining escape path. Compared sample by sample, not by the path minimum,
+// so the obstacle right next to the start cannot mask an intrusion further
+// along. Both sides are capped at `cap` (clearance beyond it does not matter);
+// `eps` absorbs voxel flicker. Returns the sample index of the first drop or -1.
+inline int firstClearanceDrop(const std::vector<double> &planned, const std::vector<double> &live, double cap,
+                              double eps)
+{
+  for (size_t i = 0; i < planned.size() && i < live.size(); ++i)
+    if (std::min(live[i], cap) < std::min(planned[i], cap) - eps)
+      return static_cast<int>(i);
+  return -1;
+}
+
 // Finds the nearest point within search_radius that the robot can reach by a
 // straight-line translation while keeping its heading (backing up and side
 // stepping both allowed), such that

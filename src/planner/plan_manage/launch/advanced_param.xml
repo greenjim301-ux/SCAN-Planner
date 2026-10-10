@@ -74,6 +74,10 @@
     <param name="fsm/escape_reach_dist" value="$(arg escape_tolerance)" type="double"/>
     <param name="fsm/escape_timeout" value="$(arg escape_timeout)" type="double"/>
     <param name="fsm/escape_allow_unknown" value="false" type="bool"/>
+    <!-- While moving, the rest of the escape path is re-checked at 20 Hz against the live map;
+         if its clearance drops by more than this [m] vs. when it was planned, emergency stop
+         (then fail_safe resumes from GEN_NEW_TRAJ). Keep it above one voxel (resolution). -->
+    <param name="fsm/escape_abort_eps" value="0.08" type="double"/>
 
     <!-- sliding map -->
     <param name="grid_map/resolution" value="0.05" />

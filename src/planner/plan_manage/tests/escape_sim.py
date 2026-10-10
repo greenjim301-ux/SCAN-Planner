@@ -5,7 +5,9 @@ fsm/stuck_timeout is cut to 4 s. Logs and launch file go to /tmp/navibot_escape_
 
 usage (workspace root, focal schroot, after sourcing devel):
   python3 src/SCAN-Planner/src/planner/plan_manage/tests/escape_sim.py [wall_half_y] [goal_x goal_y]
-e.g. "5.0 3.0 0.0" (goal behind a long wall: planner fails -> stuck -> escape backs up 0.2 m)."""
+e.g. "5.0 3.0 0.0" (goal behind a long wall: planner fails -> stuck -> escape backs up 0.2 m).
+--intruder: as soon as the escape goal is sent, put a person-sized block right behind the
+robot's escape target and slow the escape to 0.1 m/s; expect [escape] New obstacle -> ESCAPE_SAFETY."""
 import math, os, signal, socket, subprocess, sys, time
 import xml.etree.ElementTree as ET
 import rospy
@@ -17,6 +19,8 @@ from std_msgs.msg import Header
 
 from pathlib import Path as FilePath
 PKG = str(FilePath(__file__).resolve().parents[1])
+INTRUDER = '--intruder' in sys.argv
+sys.argv = [a for a in sys.argv if a != '--intruder']
 WALL_HALF = float(sys.argv[1]) if len(sys.argv) > 1 else 5.0
 GOAL = (float(sys.argv[2]), float(sys.argv[3])) if len(sys.argv) > 3 else (3.0, 0.0)
 with socket.socket() as probe:
@@ -57,6 +61,8 @@ try:
     for k, v in args.items():
         ET.SubElement(inc, 'arg', name=k, value=v)
     ET.SubElement(root, 'param', name='scan_planner_node/fsm/stuck_timeout', value='4.0', type='double')
+    if INTRUDER:
+        ET.SubElement(root, 'param', name='closed_loop_controller/escape_speed', value='0.1', type='double')
     ET.SubElement(root, 'param', name='closed_loop_controller/log_dir', value='')
     ET.SubElement(root, 'node', pkg='scan_planner', type='closed_loop_controller', name='closed_loop_controller', output='screen')
     ET.SubElement(root, 'node', pkg='scan_planner', type='go2_kinematic_sim', name='go2_kinematic_sim', output='screen')
@@ -74,11 +80,16 @@ try:
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             h = Header(frame_id='world', stamp=rospy.Time.now())
-            cloud_pub.publish(point_cloud2.create_cloud_xyz32(h, pts))
+            cloud = pts
+            if INTRUDER and goals:
+                # the person occludes the back wall behind it (a real lidar does not see through)
+                cloud = [q for q in pts if not (q[0] < -2.0 and abs(q[1]) < 0.4)] + [(-0.5 + dx, dy, dz) for dx in (0.0, -0.05, -0.1) for dy in (-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15)
+                               for dz in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)]
+            cloud_pub.publish(point_cloud2.create_cloud_xyz32(h, cloud))
             p = latest[0].pose.pose
             trace.append((time.monotonic() - t0, p.position.x, p.position.y,
                           2 * math.atan2(p.orientation.z, p.orientation.w)))
-            time.sleep(.1)
+            time.sleep(.05)
     pump(3.0)
     route = Path(); route.header.frame_id = 'world'
     wp = PoseStamped(); wp.pose.position.x, wp.pose.position.y = GOAL; wp.pose.position.z = .3; wp.pose.orientation.w = 1

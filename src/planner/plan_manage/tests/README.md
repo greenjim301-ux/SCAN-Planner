@@ -100,4 +100,13 @@ FSM 进入 `ESCAPE`：在 `fsm/escape_search_radius`（1 m）内找最近的点�
 不靠近障碍或找不到可达空闲点时只打印 WARN，原流程继续，计时重新开始。
 新 bspline 或 `/planning/stop` 会立即结束脱困平移。只有 `controller_mode:=closed_loop` 时启用。
 
+平移过程中 FSM 以 20 Hz 用实时地图复查剩余路径：沿路径逐点比较当前地图与搜索时快照的机身间距
+（封顶在所需间距），任一点下降超过 `fsm/escape_abort_eps`（0.08 m，需大于一个体素）即急停
+（`ESCAPE_SAFETY` → EMERGENCY_STOP，fail_safe 后回到 GEN_NEW_TRAJ，仍卡住则 10 s 后按新地图重新搜索）。
+逐点而不是取路径最小值，是为了不让起点旁边那面墙把路径后段的闯入"遮住"。
+`escape_timeout` 应大于 `escape_search_radius / escape_speed`（默认 1 m / 0.3 m/s ≈ 3.3 s < 5 s）。
+
+闭环仿真：`tests/escape_sim.py 5.0 3.0 0.0`（正常脱困）、加 `--intruder`（脱困开始后在目标点后方放一个人，
+脱困降速到 0.1 m/s，应在约 0.15 s 内 ESCAPE_SAFETY）。
+
 纯逻辑单测：`ctest -R escape_search_test --output-on-failure`。
