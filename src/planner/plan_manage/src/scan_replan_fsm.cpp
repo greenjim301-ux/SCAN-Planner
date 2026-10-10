@@ -274,6 +274,7 @@ namespace scan_planner
       ROS_INFO("[navi_mode=%d] Waypoint %d/%zu coincides with current position, skip it.",
                navi_mode_, current_wp_ + 1, active_waypoints_.size());
       current_wp_++;
+      replan_fail_count_ = 0;
     }
 
     if (current_wp_ < 0 || current_wp_ >= (int)active_waypoints_.size())
@@ -679,6 +680,8 @@ namespace scan_planner
           ROS_INFO("[navi_mode=%d] Waypoint %d/%zu already reached, advancing.",
                    navi_mode_, current_wp_ + 1, active_waypoints_.size());
           current_wp_++;
+          // Failures belong to the previous waypoint, not the next one.
+          replan_fail_count_ = 0;
           if (!planNextWaypoint())
             replan_fail_count_++;
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
@@ -739,6 +742,7 @@ namespace scan_planner
           (end_pt_ - odom_pos_).norm() < waypoint_arrival_radius_)
       {
         current_wp_++;
+        replan_fail_count_ = 0;
         if (planNextWaypoint())
         {
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
@@ -755,6 +759,7 @@ namespace scan_planner
         if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
         {
           current_wp_++;
+          replan_fail_count_ = 0;
           if (planNextWaypoint())
           {
             changeFSMExecState(GEN_NEW_TRAJ, "FSM");
