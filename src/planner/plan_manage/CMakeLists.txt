@@ -85,4 +85,6 @@ if(CATKIN_ENABLE_TESTING)
     tests/waypoint_velocity_test.cpp
     ../traj_utils/src/polynomial_traj.cpp)
   add_test(NAME waypoint_velocity_test COMMAND waypoint_velocity_test)
+  add_executable(escape_search_test tests/escape_search_test.cpp)
+  add_test(NAME escape_search_test COMMAND escape_search_test)
 endif()

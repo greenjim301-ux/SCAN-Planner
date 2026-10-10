@@ -18,6 +18,12 @@
   <arg name="planning_horizon" default="5.0"/>
   <arg name="waypoint_continuous" default="true"/>
   <arg name="waypoint_pass_speed" default="0"/>
+  <arg name="escape_enable" default="true"/>
+  <!-- max time [s] for one escape move; shared by the FSM and the controller -->
+  <arg name="escape_timeout" default="5.0"/>
+  <!-- [m] escape arrival distance; shared by the FSM and the controller. The target is
+       chosen with this much extra clearance, so stopping short still clears the obstacle. -->
+  <arg name="escape_tolerance" default="0.05"/>
 
   <!-- main node -->
   <!-- required="true": 规划器退出时把整组节点一起带走。closed_loop_controller 是
@@ -52,6 +58,22 @@
     <param name="fsm/max_replan_fail_count" value="1000" type="int"/>
     <param name="fsm/waypoint_skip_fail_count" value="100" type="int"/>
     <param name="fsm/is_real_world" value="$(arg is_real_world)" type="bool"/>
+    <!-- Stuck escape: with a target, if the robot neither moves stuck_min_dist nor turns
+         stuck_min_yaw for stuck_timeout seconds AND its footprint clearance is below
+         double_cylinder_radius + escape_margin, planning pauses and the robot translates
+         (heading kept: backing up / side stepping) to the nearest spot within
+         escape_search_radius with that clearance, never getting closer to obstacles on
+         the way. Then the normal flow resumes from GEN_NEW_TRAJ with a fresh stuck window.
+         escape_allow_unknown=false rejects targets in unobserved cells. -->
+    <param name="fsm/escape_enable" value="$(arg escape_enable)" type="bool"/>
+    <param name="fsm/stuck_timeout" value="10.0" type="double"/>
+    <param name="fsm/stuck_min_dist" value="0.15" type="double"/>
+    <param name="fsm/stuck_min_yaw" value="0.5" type="double"/>
+    <param name="fsm/escape_search_radius" value="1.0" type="double"/>
+    <param name="fsm/escape_margin" value="0.1" type="double"/>
+    <param name="fsm/escape_reach_dist" value="$(arg escape_tolerance)" type="double"/>
+    <param name="fsm/escape_timeout" value="$(arg escape_timeout)" type="double"/>
+    <param name="fsm/escape_allow_unknown" value="false" type="bool"/>
 
     <!-- sliding map -->
     <param name="grid_map/resolution" value="0.05" />
@@ -124,6 +146,10 @@
   <!-- A nonzero endpoint may await its successor for at most 150 ms. -->
   <param name="closed_loop_controller/continuous_handoff" value="$(eval arg('navi_mode') == 2 and arg('waypoint_continuous'))" type="bool"/>
   <param name="closed_loop_controller/handoff_timeout" value="0.15" type="double"/>
+  <!-- stuck escape move (planning/escape_goal): constant body-frame speed, heading held -->
+  <param name="closed_loop_controller/escape_speed" value="0.3" type="double"/>
+  <param name="closed_loop_controller/escape_tolerance" value="$(arg escape_tolerance)" type="double"/>
+  <param name="closed_loop_controller/escape_timeout" value="$(arg escape_timeout)" type="double"/>
   <!-- one CSV per tracking session (pose, desired pose, cmd_vel at 100 Hz); empty value disables -->
   <param name="closed_loop_controller/log_dir" value="$(optenv HOME /tmp)/scan_planner_track_logs" type="str"/>
 

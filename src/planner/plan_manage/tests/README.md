@@ -86,3 +86,18 @@ schroot -c focal -- bash -c 'source /opt/ros/noetic/setup.bash && source devel/s
 `manager/boundary_aware_time` 由同一组 launch 参数推导；直接配置节点参数时需要单独关闭。
 
 本版本尚未部署到板子，尚未进行 M20S 实机验证。
+
+## 卡住脱困（stuck escape）
+
+有目标且处于 GEN_NEW_TRAJ / REPLAN_TRAJ / EXEC_TRAJ 时，若 `fsm/stuck_timeout`（默认 10 s）内
+平移不超过 `fsm/stuck_min_dist`（0.15 m）、转向不超过 `fsm/stuck_min_yaw`（0.5 rad），
+并且机身（双圆柱中心连线）到原始障碍的距离小于 `double_cylinder_radius + fsm/escape_margin`，
+FSM 进入 `ESCAPE`：在 `fsm/escape_search_radius`（1 m）内找最近的点，要求
+目标点间距 ≥ 上述阈值 + `escape_tolerance`、膨胀地图空闲、非未知（`fsm/escape_allow_unknown`），
+且直线路径上任一点都不比起点更靠近障碍。找到后发 `/planning/escape_goal`，
+`closed_loop_controller` 保持航向，以 `escape_speed`（0.3 m/s）在机体系平移（可后退、可横移）。
+到达（`escape_tolerance`）或超时（`escape_timeout`）后回到 GEN_NEW_TRAJ，重新开始卡住计时。
+不靠近障碍或找不到可达空闲点时只打印 WARN，原流程继续，计时重新开始。
+新 bspline 或 `/planning/stop` 会立即结束脱困平移。只有 `controller_mode:=closed_loop` 时启用。
+
+纯逻辑单测：`ctest -R escape_search_test --output-on-failure`。

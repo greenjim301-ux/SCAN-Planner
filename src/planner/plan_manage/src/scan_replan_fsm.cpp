@@ -44,6 +44,15 @@ namespace scan_planner
     nh.param("grid_map/double_cylinder_offset", self_double_cylinder_offset_, 0.0);
     nh.param("grid_map/body_height", body_height_, 0.0);
     nh.param("grid_map/frame_id", self_inflation_frame_id_, std::string("world"));
+    nh.param("fsm/escape_enable", escape_enable_, true);
+    nh.param("fsm/stuck_timeout", stuck_timeout_, 10.0);
+    nh.param("fsm/stuck_min_dist", stuck_min_dist_, 0.15);
+    nh.param("fsm/stuck_min_yaw", stuck_min_yaw_, 0.5);
+    nh.param("fsm/escape_search_radius", escape_search_radius_, 1.0);
+    nh.param("fsm/escape_margin", escape_margin_, 0.1);
+    nh.param("fsm/escape_reach_dist", escape_reach_dist_, 0.05);
+    nh.param("fsm/escape_timeout", escape_timeout_, 5.0);
+    nh.param("fsm/escape_allow_unknown", escape_allow_unknown_, false);
 
     /* initialize main modules */
     visualization_.reset(new PlanningVisualization(nh));
@@ -65,6 +74,7 @@ namespace scan_planner
     finished_pub_ = nh.advertise<scan_planner::PlanFinished>("/planning/finished", 10);
     data_disp_pub_ = nh.advertise<scan_planner::DataDisp>("/planning/data_display", 100);
     self_inflation_pub_ = nh.advertise<visualization_msgs::Marker>("self_inflation", 10, true);
+    escape_goal_pub_ = nh.advertise<geometry_msgs::PoseStamped>("/planning/escape_goal", 10);
 
     if (navi_mode_ == NAVI_MODE::MANUAL_TARGET)
       goal_sub_ = nh.subscribe("/move_base_simple/goal", 1, &SCANReplanFSM::rvizGoalCallback, this);
@@ -521,6 +531,116 @@ namespace scan_planner
       info->start_time_ += ros::Duration(dt);
   }
 
+  bool SCANReplanFSM::checkStuckAndStartEscape()
+  {
+    const bool active = escape_enable_ && have_odom_ && have_target_ &&
+                        (exec_state_ == GEN_NEW_TRAJ || exec_state_ == REPLAN_TRAJ || exec_state_ == EXEC_TRAJ);
+    if (!active)
+    {
+      stuck_detector_.reset();
+      return false;
+    }
+
+    const double yaw = getOdomYaw();
+    if (!stuck_detector_.update(ros::Time::now().toSec(), odom_pos_.head<2>(), yaw,
+                                stuck_timeout_, stuck_min_dist_, stuck_min_yaw_))
+      return false;
+    // Whatever happens below, the next check starts a fresh stuck window.
+    stuck_detector_.reset();
+
+    auto map = planner_manager_->grid_map_;
+    EscapeParams params;
+    params.resolution = map->getResolution();
+    params.search_radius = escape_search_radius_;
+    params.body_offset = self_double_cylinder_offset_;
+    params.body_radius = self_double_cylinder_radius_;
+    params.margin = escape_margin_;
+    // The controller may stop up to escape_reach_dist short of the target.
+    params.target_pad = escape_reach_dist_;
+
+    // Raw (not inflated) obstacles in the same height band the inflated map
+    // uses: an obstacle voxel at z_o blocks [z_o - z_down, z_o + z_up].
+    const double required = params.body_radius + params.margin;
+    const double half = params.search_radius + params.body_offset + required + params.target_pad + 2.0 * params.resolution;
+    Eigen::Vector3i lo, hi;
+    map->posToIndex(odom_pos_ - Eigen::Vector3d(half, half, self_inflation_z_up_), lo);
+    map->posToIndex(odom_pos_ + Eigen::Vector3d(half, half, self_inflation_z_down_), hi);
+    std::vector<Eigen::Vector2d> obstacles;
+    for (int x = lo.x(); x <= hi.x(); ++x)
+      for (int y = lo.y(); y <= hi.y(); ++y)
+        for (int z = lo.z(); z <= hi.z(); ++z)
+        {
+          const Eigen::Vector3i id(x, y, z);
+          if (map->getOccupancy(id) != 1)
+            continue;
+          Eigen::Vector3d pos;
+          map->indexToPos(id, pos);
+          obstacles.push_back(pos.head<2>());
+          break; // one hit per column is enough for a planar distance
+        }
+
+    const double z = odom_pos_.z();
+    auto target_ok = [&](const Eigen::Vector2d &xy)
+    {
+      const Eigen::Vector3d pt(xy.x(), xy.y(), z);
+      if (map->getInflateOccupancy(pt, yaw) != 0)
+        return false;
+      return escape_allow_unknown_ || !map->isUnknown(pt);
+    };
+    const EscapeResult res = findEscapeTarget(odom_pos_.head<2>(), yaw, obstacles, params, target_ok);
+
+    if (!res.found)
+    {
+      if (res.start_clearance >= required)
+        ROS_WARN("[escape] No progress for %.1f s, but clearance %.2f m >= %.2f m: not blocked by an obstacle, keep planning.",
+                 stuck_timeout_, res.start_clearance, required);
+      else
+        ROS_WARN("[escape] No progress for %.1f s, clearance %.2f m < %.2f m, but no reachable free spot within %.2f m, keep planning.",
+                 stuck_timeout_, res.start_clearance, required, escape_search_radius_);
+      return false;
+    }
+
+    escape_target_ = Eigen::Vector3d(res.target.x(), res.target.y(), z);
+    escape_start_time_ = ros::Time::now();
+
+    // Park the local traj at the current pose so nothing downstream keeps
+    // evaluating the old one. No planning/stop here: the escape goal itself
+    // takes the controller off trajectory tracking, and a stop message could
+    // be delivered after the next bspline and cancel it.
+    planner_manager_->EmergencyStop(odom_pos_);
+
+    geometry_msgs::PoseStamped goal;
+    goal.header.stamp = escape_start_time_;
+    goal.header.frame_id = self_inflation_frame_id_.empty() ? "world" : self_inflation_frame_id_;
+    goal.pose.position.x = escape_target_.x();
+    goal.pose.position.y = escape_target_.y();
+    goal.pose.position.z = escape_target_.z();
+    goal.pose.orientation.w = odom_orient_.w();
+    goal.pose.orientation.x = odom_orient_.x();
+    goal.pose.orientation.y = odom_orient_.y();
+    goal.pose.orientation.z = odom_orient_.z();
+    escape_goal_pub_.publish(goal);
+    visualization_->displayGoalPoint(escape_target_, Eigen::Vector4d(1.0, 0.5, 0.0, 1.0), 0.3, 900);
+
+    const Eigen::Vector2d d = res.target - odom_pos_.head<2>();
+    ROS_WARN("[escape] Stuck for %.1f s with clearance %.2f m < %.2f m. Moving %.2f m (body frame dx=%.2f dy=%.2f) "
+             "to [%.2f, %.2f], clearance there %.2f m.",
+             stuck_timeout_, res.start_clearance, required, d.norm(),
+             std::cos(yaw) * d.x() + std::sin(yaw) * d.y(), -std::sin(yaw) * d.x() + std::cos(yaw) * d.y(),
+             res.target.x(), res.target.y(), res.target_clearance);
+    changeFSMExecState(ESCAPE, "STUCK");
+    return true;
+  }
+
+  void SCANReplanFSM::finishEscape(const char *reason)
+  {
+    // Back to the original flow; the stuck window restarts from here. The
+    // controller drops the escape when the next bspline arrives (or stops on
+    // its own at the target / its own timeout).
+    stuck_detector_.reset();
+    changeFSMExecState(GEN_NEW_TRAJ, reason);
+  }
+
   double SCANReplanFSM::getOdomYaw() const
   {
     Eigen::Vector3d heading = odom_orient_.toRotationMatrix().col(0);
@@ -588,7 +708,7 @@ namespace scan_planner
     else
       continuously_called_times_ = 1;
 
-    static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
+    static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "ESCAPE"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
     cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
@@ -601,7 +721,7 @@ namespace scan_planner
 
   void SCANReplanFSM::printFSMExecState()
   {
-    static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
+    static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "ESCAPE"};
 
     cout << "[FSM]: state: " + state_str[int(exec_state_)] << endl;
   }
@@ -621,6 +741,9 @@ namespace scan_planner
         cout << "wait for goal." << endl;
       fsm_num = 0;
     }
+
+    if (checkStuckAndStartEscape())
+      return;
 
     switch (exec_state_)
     {
@@ -824,6 +947,23 @@ namespace scan_planner
       flag_escape_emergency_ = false;
       break;
     }
+
+    case ESCAPE:
+    {
+      const double dist = (odom_pos_ - escape_target_).head<2>().norm();
+      if (dist < escape_reach_dist_)
+      {
+        ROS_WARN("[escape] Reached escape target (%.2f m left), resume planning.", dist);
+        finishEscape("ESCAPE_DONE");
+      }
+      else if ((ros::Time::now() - escape_start_time_).toSec() > escape_timeout_)
+      {
+        ROS_WARN("[escape] Not at escape target after %.1f s (%.2f m left), resume planning anyway.",
+                 escape_timeout_, dist);
+        finishEscape("ESCAPE_TIMEOUT");
+      }
+      break;
+    }
     }
 
     finishProcess();
@@ -971,7 +1111,7 @@ namespace scan_planner
     LocalTrajData *info = &planner_manager_->local_data_;
     auto map = planner_manager_->grid_map_;
 
-    if (exec_state_ == WAIT_TARGET || info->start_time_.toSec() < 1e-5)
+    if (exec_state_ == WAIT_TARGET || exec_state_ == ESCAPE || info->start_time_.toSec() < 1e-5)
       return;
 
     /* ---------- check trajectory ---------- */

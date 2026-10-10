@@ -9,6 +9,7 @@
 #include <string>
 
 #include <Eigen/Eigen>
+#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/Odometry.h>
 #include <ros/ros.h>
@@ -31,6 +32,7 @@ ros::Publisher execution_frozen_pub;
 ros::Subscriber bspline_sub;
 ros::Subscriber odom_sub;
 ros::Subscriber stop_sub;
+ros::Subscriber escape_sub;
 ros::Timer cmd_timer;
 
 bool receive_traj = false;
@@ -118,6 +120,17 @@ double finish_timeout;
 bool continuous_handoff = false;
 double handoff_timeout = 0.15;
 std::string body_pose_topic;
+// Stuck escape (planning/escape_goal from the FSM): translate straight to the
+// goal at escape_speed while holding the goal heading -- no turn towards the
+// motion direction, so backing up and side stepping happen as such. Ends at
+// escape_tolerance, after escape_timeout, on planning/stop or on a new bspline.
+double escape_speed = 0.3;
+double escape_tolerance = 0.05;
+double escape_timeout = 5.0;
+bool escape_active = false;
+Eigen::Vector2d escape_goal = Eigen::Vector2d::Zero();
+double escape_yaw = 0.0;
+ros::Time escape_start;
 // Per-session tracking log (pose + cmd_vel every control tick); empty = off.
 std::string log_dir;
 std::ofstream log_file;
@@ -152,6 +165,15 @@ bool loadParams(const ros::NodeHandle &nh)
     ok = false;
   }
   nh.param<std::string>("log_dir", log_dir, std::string(""));
+  nh.param("escape_speed", escape_speed, escape_speed);
+  nh.param("escape_tolerance", escape_tolerance, escape_tolerance);
+  nh.param("escape_timeout", escape_timeout, escape_timeout);
+  if (escape_speed <= 0.0 || escape_tolerance <= 0.0 || escape_timeout <= 0.0)
+  {
+    ROS_ERROR("[closed_loop_controller] escape_speed=%.3f / escape_tolerance=%.3f / escape_timeout=%.3f must be > 0",
+              escape_speed, escape_tolerance, escape_timeout);
+    ok = false;
+  }
   // 位姿不连续性诊断 (只记录, 不影响控制): 两个参数都可选
   nh.param("odom_jump_max_residual", odom_jump_max_residual_, odom_jump_max_residual_);
   nh.param("odom_jump_window", odom_jump_window_, odom_jump_window_);
@@ -354,6 +376,9 @@ void bsplineCallback(const scan_planner::BsplineConstPtr &msg)
   exec_time = 0.0;
   last_update_time = ros::Time::now();
   traj_end_time = ros::Time();
+  if (escape_active)
+    ROS_WARN("[closed_loop_controller] new bspline, escape cancelled.");
+  escape_active = false;
   if (!receive_traj)
     openLog();
   receive_traj = true;
@@ -367,8 +392,51 @@ void stopCallback(const std_msgs::EmptyConstPtr &)
   // adding a second flag) reuses the exact same "no traj -> publishStop()"
   // path that cmdCallback already takes at startup / before the first bspline.
   receive_traj = false;
+  escape_active = false;
   closeLog();
   ROS_WARN("[closed_loop_controller] received stop signal, halting trajectory tracking.");
+}
+
+void escapeCallback(const geometry_msgs::PoseStampedConstPtr &msg)
+{
+  // Takes over from trajectory tracking; the next bspline takes it back.
+  receive_traj = false;
+  closeLog();
+  escape_active = true;
+  escape_goal = Eigen::Vector2d(msg->pose.position.x, msg->pose.position.y);
+  escape_yaw = tf::getYaw(msg->pose.orientation);
+  escape_start = ros::Time::now();
+  ROS_WARN("[closed_loop_controller] escape to [%.2f, %.2f] (%.2f m away), heading held at %.2f rad.",
+           escape_goal.x(), escape_goal.y(), (escape_goal - odom_pos.head<2>()).norm(), escape_yaw);
+}
+
+void escapeStep()
+{
+  const Eigen::Vector2d err = escape_goal - odom_pos.head<2>();
+  const double elapsed = (ros::Time::now() - escape_start).toSec();
+  if (err.norm() < escape_tolerance || elapsed > escape_timeout)
+  {
+    escape_active = false;
+    publishStop();
+    ROS_WARN("[closed_loop_controller] escape %s, %.3f m from the goal after %.1f s.",
+             err.norm() < escape_tolerance ? "done" : "timed out", err.norm(), elapsed);
+    return;
+  }
+
+  // Constant speed towards the goal in the body frame, scaled down as a whole
+  // (keeping the direction) if an axis exceeds its limit.
+  const double c = std::cos(odom_yaw);
+  const double s = std::sin(odom_yaw);
+  Eigen::Vector2d v_body(c * err.x() + s * err.y(), -s * err.x() + c * err.y());
+  v_body *= escape_speed / err.norm();
+  const double scale = std::max({1.0, std::abs(v_body.x()) / max_vx, std::abs(v_body.y()) / max_vy});
+  v_body /= scale;
+
+  geometry_msgs::Twist cmd;
+  cmd.linear.x = v_body.x();
+  cmd.linear.y = v_body.y();
+  cmd.angular.z = clamp(kp_yaw * normalizeAngle(escape_yaw - odom_yaw), -max_vyaw, max_vyaw);
+  cmd_vel_pub.publish(cmd);
 }
 
 // Ends tracking of the current traj for good: clears receive_traj so the
@@ -452,6 +520,13 @@ void odomCallback(const nav_msgs::OdometryConstPtr &msg)
 
 void cmdCallback(const ros::TimerEvent &)
 {
+  if (escape_active && have_odom)
+  {
+    publishExecutionFrozen(false);
+    escapeStep();
+    return;
+  }
+
   if (!receive_traj || !have_odom)
   {
     publishExecutionFrozen(false);
@@ -561,6 +636,7 @@ int main(int argc, char **argv)
   bspline_sub = node.subscribe("planning/bspline", 10, bsplineCallback);
   odom_sub = node.subscribe(body_pose_topic, 20, odomCallback, ros::TransportHints().tcpNoDelay());
   stop_sub = node.subscribe("planning/stop", 10, stopCallback);
+  escape_sub = node.subscribe("planning/escape_goal", 10, escapeCallback);
   cmd_vel_pub = node.advertise<geometry_msgs::Twist>("cmd_vel", 20);
   execution_frozen_pub = node.advertise<std_msgs::Bool>("planning/go2_execution_frozen", 10);
   cmd_timer = node.createTimer(ros::Duration(0.01), cmdCallback);

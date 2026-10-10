@@ -28,6 +28,11 @@
   <arg name="body_pose_topic" value="$(eval '/hand_lio/odom_vehicle' if arg('is_real_world') else '/quad_0/body_pose')" />
   <param name="body_pose_topic" value="$(arg body_pose_topic)" type="str"/>
 
+  <!-- controller mode -->
+  <!-- open_loop: publish trajectory-following odometry for multi-floor simulation -->
+  <!-- closed_loop: track the trajectory for 2D simulation or real-world control -->
+  <arg name="controller_mode" default="closed_loop"/>
+
   <!-- main algorithm params -->
   <include file="$(find scan_planner)/launch/advanced_param.xml">
 
@@ -54,12 +59,9 @@
     <arg name="navi_mode" value="$(arg navi_mode)" />
     <arg name="waypoint_continuous" value="$(arg waypoint_continuous)" />
     <arg name="waypoint_pass_speed" value="$(arg waypoint_pass_speed)" />
+    <!-- stuck escape is executed by closed_loop_controller only -->
+    <arg name="escape_enable" value="$(eval arg('controller_mode') == 'closed_loop')" />
   </include>
-
-  <!-- controller mode -->
-  <!-- open_loop: publish trajectory-following odometry for multi-floor simulation -->
-  <!-- closed_loop: track the trajectory for 2D simulation or real-world control -->
-  <arg name="controller_mode" default="closed_loop"/>
 
   <node if="$(eval arg('controller_mode') == 'open_loop')" pkg="scan_planner" name="open_loop_controller" type="open_loop_controller" output="screen"/>
   <group if="$(eval arg('controller_mode') == 'closed_loop')">

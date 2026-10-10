@@ -20,6 +20,7 @@
 #include <scan_planner/DataDisp.h>
 #include <scan_planner/PlanFinished.h>
 #include <plan_manage/planner_manager.h>
+#include <plan_manage/escape_search.h>
 #include <traj_utils/planning_visualization.h>
 
 using std::vector;
@@ -39,7 +40,8 @@ namespace scan_planner
       GEN_NEW_TRAJ,
       REPLAN_TRAJ,
       EXEC_TRAJ,
-      EMERGENCY_STOP
+      EMERGENCY_STOP,
+      ESCAPE
     };
     enum NAVI_MODE
     {
@@ -69,6 +71,18 @@ namespace scan_planner
     double self_double_cylinder_radius_, self_double_cylinder_offset_;
     double body_height_;
     std::string self_inflation_frame_id_;
+
+    /* stuck escape: if the robot makes no progress for stuck_timeout_ while it
+       has a target and sits too close to an obstacle, stop planning and
+       translate it (heading kept, backing up / side stepping) to the nearest
+       free spot, then resume the normal flow from GEN_NEW_TRAJ. */
+    bool escape_enable_;
+    double stuck_timeout_, stuck_min_dist_, stuck_min_yaw_;
+    double escape_search_radius_, escape_margin_, escape_reach_dist_, escape_timeout_;
+    bool escape_allow_unknown_;
+    StuckDetector stuck_detector_;
+    Eigen::Vector3d escape_target_;
+    ros::Time escape_start_time_;
 
     /* planning data */
     bool trigger_, have_target_, have_odom_, have_new_target_;
@@ -103,6 +117,7 @@ namespace scan_planner
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber goal_sub_, odom_sub_, path_sub_, waypoints_sub_, go2_execution_frozen_sub_, user_emergency_stop_sub_;
     ros::Publisher replan_pub_, new_pub_, bspline_pub_, data_disp_pub_, self_inflation_pub_, stop_pub_, finished_pub_;
+    ros::Publisher escape_goal_pub_;
 
     /* helper functions */
     SCANPlannerManager::ReplanResult callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
@@ -129,6 +144,8 @@ namespace scan_planner
     double getOdomYaw() const;
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
+    bool checkStuckAndStartEscape();
+    void finishEscape(const char *reason);
 
     /* ROS functions */
     void execFSMCallback(const ros::TimerEvent &e);
