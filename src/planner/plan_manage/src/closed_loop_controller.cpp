@@ -131,6 +131,10 @@ bool escape_active = false;
 Eigen::Vector2d escape_goal = Eigen::Vector2d::Zero();
 double escape_yaw = 0.0;
 ros::Time escape_start;
+// When the last planning/stop arrived. escape_goal and planning/stop are separate
+// topics, so ROS1 may deliver a goal issued *before* a stop *after* it; a goal
+// stamped earlier than this is stale and must not restart motion.
+ros::Time last_stop_time;
 // Per-session tracking log (pose + cmd_vel every control tick); empty = off.
 std::string log_dir;
 std::ofstream log_file;
@@ -393,12 +397,20 @@ void stopCallback(const std_msgs::EmptyConstPtr &)
   // path that cmdCallback already takes at startup / before the first bspline.
   receive_traj = false;
   escape_active = false;
+  last_stop_time = ros::Time::now();
   closeLog();
   ROS_WARN("[closed_loop_controller] received stop signal, halting trajectory tracking.");
 }
 
 void escapeCallback(const geometry_msgs::PoseStampedConstPtr &msg)
 {
+  if (!last_stop_time.isZero() && msg->header.stamp <= last_stop_time)
+  {
+    ROS_WARN("[closed_loop_controller] ignore escape goal issued %.3f s before the last stop.",
+             (last_stop_time - msg->header.stamp).toSec());
+    return;
+  }
+
   // Takes over from trajectory tracking; the next bspline takes it back.
   receive_traj = false;
   closeLog();
